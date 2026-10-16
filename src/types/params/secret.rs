@@ -1,6 +1,6 @@
 use std::io::{self, BufRead};
 
-use zeroize::ZeroizeOnDrop;
+use zeroize::{ZeroizeOnDrop, Zeroizing};
 
 use crate::{
     crypto::{aead::AeadAlgorithm, public_key::PublicKeyAlgorithm, sym::SymmetricKeyAlgorithm},
@@ -11,14 +11,91 @@ use crate::{
 
 /// Representation of the secret parameters in a key packet.
 ///
-/// Can either contain a password-locked [`EncryptedSecretParams`] or an unprotected
-/// [`PlainSecretParams`].
+/// Can either contain a password-locked [`EncryptedSecretParams`] or unprotected
+/// [`PlainSecretParams`], held as a [`PlainSecret`].
 #[derive(Debug, Clone, PartialEq, Eq, ZeroizeOnDrop)]
-#[allow(clippy::large_enum_variant)]
 pub enum SecretParams {
-    Plain(PlainSecretParams),
+    Plain(PlainSecret),
     Encrypted(EncryptedSecretParams),
 }
+
+/// Unlocked secret key material, as a key packet holds it.
+///
+/// The params are held serialized, in a buffer that wipes on drop, and parsed into a
+/// [`PlainSecretParams`] only for the duration of [`PlainSecret::with`]. A parsed value on the
+/// heap would carry stale stack bytes in its unused enum space, and moving one leaves its
+/// source bytes behind; neither can be wiped.
+#[derive(Clone, derive_more::Debug)]
+pub struct PlainSecret {
+    alg: PublicKeyAlgorithm,
+    #[debug("..")]
+    raw: Zeroizing<Vec<u8>>,
+}
+
+impl PlainSecret {
+    /// Holds `params`, the secret key material for a key of algorithm `alg`.
+    pub fn new(alg: PublicKeyAlgorithm, params: &PlainSecretParams) -> Self {
+        Self {
+            alg,
+            raw: params.to_raw(),
+        }
+    }
+
+    /// Parses the secret key material, runs `f` on it, and wipes it again.
+    ///
+    /// `public_params` are the public parameters of the key this secret belongs to.
+    pub fn with<T>(
+        &self,
+        public_params: &PublicParams,
+        f: impl FnOnce(&PlainSecretParams) -> T,
+    ) -> Result<T> {
+        let params = PlainSecretParams::from_raw(&self.raw, self.alg, public_params)?;
+        Ok(f(&params))
+    }
+
+    fn string_to_key_id(&self) -> u8 {
+        0
+    }
+
+    fn checksum_simple(&self) -> Vec<u8> {
+        let mut hasher = crate::crypto::checksum::SimpleChecksum::default();
+        std::hash::Hasher::write(&mut hasher, &self.raw);
+        hasher.finalize().to_vec()
+    }
+
+    fn to_writer<W: io::Write>(&self, writer: &mut W, version: KeyVersion) -> Result<()> {
+        writer.write_all(&self.raw)?;
+        if version == KeyVersion::V3 || version == KeyVersion::V4 {
+            // Only for a version 3 or 4 packet where the string-to-key usage octet is zero, a
+            // two-octet checksum of the algorithm-specific portion (sum of all octets, mod 65536).
+            //
+            // https://www.rfc-editor.org/rfc/rfc9580.html#section-5.5.3-3.6.1
+            writer.write_all(&self.checksum_simple())?;
+        }
+        Ok(())
+    }
+
+    fn write_len(&self, version: KeyVersion) -> usize {
+        let mut sum = self.raw.len();
+        if version == KeyVersion::V3 || version == KeyVersion::V4 {
+            sum += 2;
+        }
+        sum
+    }
+}
+
+/// Constant time in the secret bytes.
+impl PartialEq for PlainSecret {
+    fn eq(&self, other: &Self) -> bool {
+        use subtle::ConstantTimeEq;
+        self.alg == other.alg && bool::from(self.raw.as_slice().ct_eq(other.raw.as_slice()))
+    }
+}
+
+impl Eq for PlainSecret {}
+
+/// The serialized secret wipes itself on drop.
+impl ZeroizeOnDrop for PlainSecret {}
 
 impl SecretParams {
     /// `true`, if the secret key material is password-locked
@@ -200,7 +277,7 @@ fn parse_secret_fields<B: BufRead>(
     match s2k_usage {
         S2kUsage::Unprotected => {
             let params = PlainSecretParams::try_from_reader(i, key_ver, alg, public_params)?;
-            Ok(SecretParams::Plain(params))
+            Ok(SecretParams::Plain(PlainSecret::new(alg, &params)))
         }
         _ => {
             let params = EncryptedSecretParams::new(i.rest()?.freeze(), enc_params);

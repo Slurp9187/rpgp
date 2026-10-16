@@ -1,6 +1,5 @@
 use std::io::{self, BufRead, Read};
 
-use bytes::{Buf, BytesMut};
 use log::debug;
 
 use super::LimitedReader;
@@ -8,7 +7,7 @@ use crate::{
     packet::PacketHeader,
     parsing_reader::BufReadParsing,
     types::{PacketLength, Tag},
-    util::fill_buffer_bytes,
+    util::WipingBuffer,
 };
 
 const BUFFER_SIZE: usize = 8 * 1024;
@@ -22,8 +21,8 @@ pub struct PacketBodyReader<R: BufRead> {
 #[derive(derive_more::Debug)]
 enum State<R: BufRead> {
     Body {
-        #[debug("{}", hex::encode(buffer))]
-        buffer: BytesMut,
+        /// Wipes on drop: the body of a secret key packet is secret key material.
+        buffer: WipingBuffer,
         source: LimitedReader<R>,
     },
     Done {
@@ -36,7 +35,7 @@ impl<R: BufRead> BufRead for PacketBodyReader<R> {
     fn fill_buf(&mut self) -> io::Result<&[u8]> {
         self.fill_inner()?;
         match self.state {
-            State::Body { ref mut buffer, .. } => Ok(&buffer[..]),
+            State::Body { ref mut buffer, .. } => Ok(buffer.remaining()),
             State::Done { .. } => Ok(&[][..]),
             State::Error => Err(io::Error::other("PacketBodyReader errored")),
         }
@@ -58,9 +57,7 @@ impl<R: BufRead> Read for PacketBodyReader<R> {
         self.fill_inner()?;
         match self.state {
             State::Body { ref mut buffer, .. } => {
-                let to_write = buffer.remaining().min(buf.len());
-                buffer.copy_to_slice(&mut buf[..to_write]);
-                Ok(to_write)
+                Ok(buffer.copy_to(buf))
             }
             State::Done { .. } => Ok(0),
             State::Error => Err(io::Error::other("PacketBodyReader errored")),
@@ -122,7 +119,7 @@ impl<R: BufRead> PacketBodyReader<R> {
             packet_header,
             state: State::Body {
                 source,
-                buffer: BytesMut::with_capacity(BUFFER_SIZE),
+                buffer: WipingBuffer::new(BUFFER_SIZE),
             },
         })
     }
@@ -174,7 +171,7 @@ impl<R: BufRead> PacketBodyReader<R> {
                         return Ok(());
                     }
 
-                    let read = fill_buffer_bytes(&mut source, &mut buffer, BUFFER_SIZE)?;
+                    let read = buffer.fill(&mut source)?;
 
                     if read == 0 {
                         debug!("body source done: {:?}", self.packet_header);

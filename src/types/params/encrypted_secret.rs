@@ -170,7 +170,13 @@ impl EncryptedSecretParams {
 
                         // AEAD decrypt
                         let mut plaintext: BytesMut = self.data.clone().into();
-                        aead_mode.decrypt_in_place(sym_alg, &okm, nonce, &ad, &mut plaintext)?;
+                        if let Err(err) =
+                            aead_mode.decrypt_in_place(sym_alg, &okm[..], nonce, &ad, &mut plaintext)
+                        {
+                            // A failed decryption may have written plaintext in place.
+                            plaintext.zeroize();
+                            return Err(err.into());
+                        }
 
                         // Parse the decrypted key material
                         let params = PlainSecretParams::try_from_reader_no_checksum(

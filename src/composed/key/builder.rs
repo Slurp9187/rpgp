@@ -632,7 +632,10 @@ impl KeyType {
             }
         };
 
-        Ok((pub_params, types::SecretParams::Plain(plain)))
+        Ok((
+            pub_params,
+            types::SecretParams::Plain(types::PlainSecret::new(self.to_alg(), &plain)),
+        ))
     }
 }
 

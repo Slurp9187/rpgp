@@ -32,8 +32,8 @@ fn parse_pub_priv_fields<B: BufRead>(
         None => PublicParams::try_from_reader(typ, None, &mut i)?,
     };
 
-    let v = i.rest()?;
-    debug!("rest: {}", hex::encode(&v));
+    // The secret fields: read into a wiping buffer, and never logged.
+    let v = i.rest_zeroizing()?;
 
     let secret_params = SecretParams::from_slice(&v, key_ver, typ, &pub_params)?;
     Ok((pub_params, secret_params))

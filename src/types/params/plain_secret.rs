@@ -8,7 +8,7 @@ use bytes::{BufMut, Bytes, BytesMut};
 use hkdf::Hkdf;
 use log::debug;
 use sha2::Sha256;
-use zeroize::{ZeroizeOnDrop, Zeroizing};
+use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 #[cfg(feature = "pqc")]
 use crate::crypto::{
@@ -305,9 +305,9 @@ impl PlainSecretParams {
 
     /// Uses sha1_checked
     pub fn checksum_sha1(&self) -> Result<[u8; 20]> {
-        let mut buf = Vec::with_capacity(self.write_len_raw());
-        self.to_writer_raw(&mut buf).expect("known write target");
-        let checksum = checksum::calculate_sha1([&buf])?;
+        let mut buf = Zeroizing::new(Vec::with_capacity(self.write_len_raw()));
+        self.to_writer_raw(&mut *buf).expect("known write target");
+        let checksum = checksum::calculate_sha1([&buf[..]])?;
         Ok(checksum)
     }
 
@@ -353,13 +353,15 @@ impl PlainSecretParams {
                         unimplemented_err!("Encryption for V2/V3 keys is not available")
                     }
                     KeyVersion::V4 | KeyVersion::V6 => {
-                        let mut data = Vec::with_capacity(self.write_len_raw());
-                        self.to_writer_raw(&mut data).expect("preallocated vector");
+                        // Room for the checksum up front: growing would leave a plaintext copy
+                        // behind. Wiped if anything fails before it is encrypted.
+                        let mut data = Zeroizing::new(Vec::with_capacity(self.write_len_raw() + 20));
+                        self.to_writer_raw(&mut *data).expect("preallocated vector");
 
                         data.extend_from_slice(&self.checksum_sha1()?[..]);
                         sym_alg.encrypt_with_iv_regular(key.as_ref(), iv, &mut data)?;
 
-                        data
+                        std::mem::take(&mut *data)
                     }
                     KeyVersion::V5 => unimplemented_err!("v5 encryption"),
                     KeyVersion::Other(v) => unimplemented_err!("encryption for key version {}", v),
@@ -380,12 +382,6 @@ impl PlainSecretParams {
                         unimplemented_err!("Encryption for V2/V3 keys is not available")
                     }
                     KeyVersion::V4 | KeyVersion::V6 => {
-                        let data = BytesMut::with_capacity(self.write_len_raw());
-                        let mut writer = data.writer();
-                        self.to_writer_raw(&mut writer)
-                            .expect("preallocated vector");
-                        let mut data = writer.into_inner();
-
                         let Some(secret_tag) = secret_tag else {
                             bail!("no secret_tag provided");
                         };
@@ -398,8 +394,21 @@ impl PlainSecretParams {
                             *aead_mode,
                         )?;
 
-                        // AEAD encrypt
-                        aead_mode.encrypt_in_place(sym_alg, &okm, nonce, &ad, &mut data)?;
+                        // Room for the tag up front: growing would leave a plaintext copy behind.
+                        let tag_size = aead_mode.tag_size().unwrap_or_default();
+                        let data = BytesMut::with_capacity(self.write_len_raw() + tag_size);
+                        let mut writer = data.writer();
+                        self.to_writer_raw(&mut writer)
+                            .expect("preallocated vector");
+                        let mut data = writer.into_inner();
+
+                        // AEAD encrypt; on failure, wipe the plaintext before it is freed
+                        if let Err(err) =
+                            aead_mode.encrypt_in_place(sym_alg, &okm[..], nonce, &ad, &mut data)
+                        {
+                            data.zeroize();
+                            return Err(err.into());
+                        }
 
                         data
                     }
@@ -701,6 +710,26 @@ impl PlainSecretParams {
         sum
     }
 
+    /// The algorithm-specific secret fields, without checksum, in a wiping buffer of exact
+    /// size. This is the form [`PlainSecret`](crate::types::PlainSecret) holds.
+    pub(crate) fn to_raw(&self) -> Zeroizing<Vec<u8>> {
+        let mut raw = Zeroizing::new(Vec::with_capacity(self.write_len_raw()));
+        self.to_writer_raw(&mut *raw).expect("writing to a Vec");
+        raw
+    }
+
+    /// Parses the form [`Self::to_raw`] writes.
+    pub(crate) fn from_raw(
+        raw: &[u8],
+        alg: PublicKeyAlgorithm,
+        public_params: &PublicParams,
+    ) -> Result<Self> {
+        let mut i = raw;
+        let params = Self::try_from_reader_inner(&mut i, alg, public_params)?;
+        ensure!(i.is_empty(), "failed to process full secret key material");
+        Ok(params)
+    }
+
     fn compare_checksum_simple(&self, other: &[u8]) -> Result<()> {
         let mut hasher = checksum::SimpleChecksum::default();
         self.to_writer_raw(&mut hasher)?;
@@ -818,10 +847,10 @@ pub(crate) fn s2k_usage_aead(
     pub_key: &(impl KeyDetails + Serialize),
     sym_alg: SymmetricKeyAlgorithm,
     aead_mode: AeadAlgorithm,
-) -> Result<([u8; 32], Vec<u8>)> {
+) -> Result<(Zeroizing<[u8; 32]>, Vec<u8>)> {
     // HKDF to derive output keying material
     let hk = Hkdf::<Sha256>::new(None, derived);
-    let mut okm = [0u8; 32];
+    let mut okm = Zeroizing::new([0u8; 32]);
 
     let type_id = u8::from(secret_tag) | 0xc0;
 
@@ -833,7 +862,7 @@ pub(crate) fn s2k_usage_aead(
         aead_mode.into(),
     ];
 
-    hk.expand(&info, &mut okm)
+    hk.expand(&info, &mut okm[..])
         .expect("32 is a valid length for Sha256 to output");
 
     // Additional data:

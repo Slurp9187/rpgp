@@ -19,7 +19,7 @@ use crate::{
     ser::Serialize,
     types::{
         DecryptionKey, EddsaLegacyPublicParams, EskType, Fingerprint, Imprint, KeyDetails, KeyId,
-        KeyVersion, Password, PkeskBytes, PlainSecretParams, PublicParams, SecretParams,
+        KeyVersion, Password, PkeskBytes, PlainSecret, PlainSecretParams, PublicParams, SecretParams,
         SignatureBytes, SigningKey, Tag, Timestamp,
     },
 };
@@ -107,7 +107,7 @@ impl SecretKey {
     {
         let pub_params = self.details.public_params();
         match self.secret_params {
-            SecretParams::Plain(ref k) => Ok(work(pub_params, k)),
+            SecretParams::Plain(ref k) => k.with(pub_params, |k| work(pub_params, k)),
             SecretParams::Encrypted(ref k) => {
                 let plain = k.unlock(pw, &self.details, Some(self.packet_header.tag()))?;
                 Ok(work(pub_params, &plain))
@@ -203,7 +203,7 @@ impl SecretSubkey {
     {
         let pub_params = self.details.public_params();
         match self.secret_params {
-            SecretParams::Plain(ref k) => Ok(work(pub_params, k)),
+            SecretParams::Plain(ref k) => k.with(pub_params, |k| work(pub_params, k)),
             SecretParams::Encrypted(ref k) => {
                 let plain = k.unlock(pw, &self.details, Some(self.packet_header.tag()))?;
                 Ok(work(pub_params, &plain))
@@ -453,7 +453,8 @@ impl SecretKey {
     pub fn remove_password(&mut self, password: &Password) -> Result<()> {
         if let SecretParams::Encrypted(enc) = &self.secret_params {
             let unlocked = enc.unlock(password, &self.details, Some(self.packet_header.tag()))?;
-            self.secret_params = SecretParams::Plain(unlocked);
+            self.secret_params =
+                SecretParams::Plain(PlainSecret::new(self.details.algorithm(), &unlocked));
         }
 
         Ok(())
@@ -493,12 +494,15 @@ impl SecretKey {
             }
         };
 
-        self.secret_params = SecretParams::Encrypted(plain.clone().encrypt(
-            &password.read(),
-            s2k_params,
-            &self.details,
-            Some(self.packet_header.tag()),
-        )?);
+        let encrypted = plain.with(self.details.public_params(), |plain| {
+            plain.encrypt(
+                &password.read(),
+                s2k_params,
+                &self.details,
+                Some(self.packet_header.tag()),
+            )
+        })??;
+        self.secret_params = SecretParams::Encrypted(encrypted);
 
         Ok(())
     }
@@ -514,7 +518,8 @@ impl SecretSubkey {
     pub fn remove_password(&mut self, password: &Password) -> Result<()> {
         if let SecretParams::Encrypted(enc) = &self.secret_params {
             let unlocked = enc.unlock(password, &self.details, Some(self.packet_header.tag()))?;
-            self.secret_params = SecretParams::Plain(unlocked);
+            self.secret_params =
+                SecretParams::Plain(PlainSecret::new(self.details.algorithm(), &unlocked));
         }
 
         Ok(())
@@ -552,12 +557,15 @@ impl SecretSubkey {
             }
         };
 
-        self.secret_params = SecretParams::Encrypted(plain.clone().encrypt(
-            &password.read(),
-            s2k_params,
-            &self.details,
-            Some(self.packet_header.tag()),
-        )?);
+        let encrypted = plain.with(self.details.public_params(), |plain| {
+            plain.encrypt(
+                &password.read(),
+                s2k_params,
+                &self.details,
+                Some(self.packet_header.tag()),
+            )
+        })??;
+        self.secret_params = SecretParams::Encrypted(encrypted);
 
         Ok(())
     }

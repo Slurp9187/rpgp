@@ -124,6 +124,27 @@ pub trait BufReadParsing: BufRead + Sized {
         Ok(Bytes::from(buffer).into())
     }
 
+    /// Reads the rest of the data into a buffer that wipes on drop. When the buffer grows, the
+    /// old one is wiped too, so no partial copy is left behind. For secret material.
+    fn rest_zeroizing(&mut self) -> Result<zeroize::Zeroizing<Vec<u8>>> {
+        let mut out = zeroize::Zeroizing::new(Vec::new());
+        loop {
+            let buf = self.fill_buf()?;
+            if buf.is_empty() {
+                return Ok(out);
+            }
+            let n = buf.len();
+            if out.len() + n > out.capacity() {
+                let mut bigger =
+                    zeroize::Zeroizing::new(Vec::with_capacity((out.len() + n).max(2 * out.capacity())));
+                bigger.extend_from_slice(&out);
+                out = bigger;
+            }
+            out.extend_from_slice(buf);
+            self.consume(n);
+        }
+    }
+
     /// Drain the data in this reader, to make sure all is consumed.
     /// Returns how many bytes have been drained
     fn drain(&mut self) -> Result<u64> {

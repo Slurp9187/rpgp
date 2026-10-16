@@ -2,7 +2,7 @@ use bytes::BytesMut;
 use log::debug;
 use rand::{CryptoRng, Rng};
 use x25519_dalek::{PublicKey, StaticSecret};
-use zeroize::{ZeroizeOnDrop, Zeroizing};
+use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use super::hash::HashAlgorithm;
 use crate::{
@@ -54,9 +54,10 @@ impl Curve25519Legacy {
 
     /// Reads the value in the reverse order (little endian), because..PGP screwed up
     pub fn try_from_bytes_rev(bytes: &[u8]) -> Result<Self> {
-        let rev: Vec<u8> = bytes.iter().rev().copied().collect();
-        let secret_raw = pad_key::<32>(&rev)?;
+        let rev: Zeroizing<Vec<u8>> = Zeroizing::new(bytes.iter().rev().copied().collect());
+        let mut secret_raw = pad_key::<32>(&rev)?;
         let secret = x25519_dalek::StaticSecret::from(secret_raw);
+        secret_raw.zeroize();
         Ok(Self(secret))
     }
 
@@ -229,12 +230,12 @@ impl SecretKey {
 
                 // create scalar and reverse to little endian
                 // https://www.rfc-editor.org/rfc/rfc9580.html#name-curve25519legacy-ecdh-secre
-                Mpi::from_raw(bytes.to_vec().into())
+                Mpi::from_raw(bytes.to_vec())
             }
             Self::P256 { secret, .. } => Mpi::from_slice(&secret.to_bytes()),
             Self::P384 { secret, .. } => Mpi::from_slice(&secret.to_bytes()),
             Self::P521 { secret, .. } => Mpi::from_slice(&secret.to_bytes()),
-            Self::Unsupported { mpi_data, .. } => Mpi::from_raw(mpi_data.clone().into()),
+            Self::Unsupported { mpi_data, .. } => Mpi::from_raw(mpi_data.to_vec()),
         }
     }
 

@@ -1,8 +1,8 @@
 use std::io::{self, BufRead};
 
 use byteorder::{BigEndian, WriteBytesExt};
-use bytes::{Buf, Bytes};
 use num_bigint::BigUint;
+use zeroize::Zeroizing;
 
 use crate::{
     errors::{InvalidInputSnafu, Result},
@@ -17,17 +17,20 @@ const MAX_EXTERN_MPI_BITS: u16 = 16384;
 /// Represents an owned MPI value.
 /// The inner value is ready to be serialized, without the need to strip leading zeros.
 ///
+/// MPIs carry secret key material (RSA, DSA, Elgamal, ECDSA, ECDH, EdDSALegacy), so the value is
+/// wiped on drop and `Debug` shows only its length.
+///
 /// Ref: <https://www.rfc-editor.org/rfc/rfc9580.html#name-multiprecision-integers>
 #[derive(Default, Clone, PartialEq, Eq, derive_more::Debug)]
-pub struct Mpi(#[debug("{}", hex::encode(_0))] Bytes);
+pub struct Mpi(#[debug("{} bytes", _0.len())] Zeroizing<Vec<u8>>);
 
 impl Mpi {
     /// Wraps the given bytes as an MPI, must be normalized before
     /// Avoid if possible.
     ///
     /// Only used internally to handle reversed Curve 25519 "Mpis".
-    pub(crate) fn from_raw(bytes: Bytes) -> Self {
-        Mpi(bytes)
+    pub(crate) fn from_raw(bytes: Vec<u8>) -> Self {
+        Mpi(Zeroizing::new(bytes))
     }
 
     pub fn len(&self) -> usize {
@@ -50,16 +53,18 @@ impl Mpi {
 
         let len_bytes = (len_bits + 7) >> 3;
 
-        let mut n = i.take_bytes(usize::from(len_bytes))?.freeze();
-        let n_stripped = match leading_zeros_offset(&n) {
+        // At most 2048 bytes (MAX_EXTERN_MPI_BITS), so read into an exact-size buffer: a growing
+        // one would leave copies behind.
+        let mut n = Zeroizing::new(vec![0u8; usize::from(len_bytes)]);
+        i.read_exact(&mut n)?;
+        match leading_zeros_offset(&n) {
             Some(offset) => {
-                n.advance(offset);
-                n
+                n.drain(..offset);
             }
-            None => Bytes::new(),
-        };
+            None => n.clear(),
+        }
 
-        Ok(Mpi(n_stripped))
+        Ok(Mpi(n))
     }
 
     /// Represent the data in `raw` as an Mpi.
@@ -67,7 +72,7 @@ impl Mpi {
     ///
     /// Strips leading zeros.
     pub fn from_slice(raw: &[u8]) -> Self {
-        Self(strip_leading_zeros(raw).to_vec().into())
+        Self(Zeroizing::new(strip_leading_zeros(raw).to_vec()))
     }
 }
 
@@ -96,7 +101,7 @@ fn leading_zeros_offset(bytes: &[u8]) -> Option<usize> {
 
 impl AsRef<[u8]> for Mpi {
     fn as_ref(&self) -> &[u8] {
-        self.0.as_ref()
+        &self.0
     }
 }
 
@@ -116,14 +121,16 @@ impl Serialize for Mpi {
 }
 
 impl From<BigUint> for Mpi {
-    fn from(other: BigUint) -> Self {
-        Mpi(other.to_bytes_be().into())
+    fn from(mut other: BigUint) -> Self {
+        let mpi = Mpi(Zeroizing::new(other.to_bytes_be()));
+        zeroize::Zeroize::zeroize(&mut other);
+        mpi
     }
 }
 
 impl From<&BigUint> for Mpi {
     fn from(other: &BigUint) -> Self {
-        Mpi(other.to_bytes_be().into())
+        Mpi(Zeroizing::new(other.to_bytes_be()))
     }
 }
 
