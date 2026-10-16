@@ -42,6 +42,8 @@ pub mod slh_dsa_shake128f;
 pub mod slh_dsa_shake128s;
 #[cfg(feature = "pqc")]
 pub mod slh_dsa_shake256s;
+#[cfg(test)]
+mod zeroize_features;
 
 // Misc
 

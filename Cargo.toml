@@ -42,15 +42,15 @@ flate2 = { version = "1.1.1", default-features = false, features = ["zlib-rs"] }
 bzip2 = { version = "0.6.0", optional = true }
 
 # Crypto
-aes = "0.8.4"
+aes = { version = "0.8.4", features = ["zeroize"] }
 aead = { version = "0.5", features = ["bytes"] }
 argon2 = { version = "0.5", features = ["zeroize", "std"] }
 block-padding = "0.3"
-blowfish = "0.9"
-camellia = "0.1"
-cast5 = "0.11"
-cfb-mode = "0.8.2"
-cipher = "0.4.2"
+blowfish = { version = "0.9", features = ["zeroize"] }
+camellia = { version = "0.1", features = ["zeroize"] }
+cast5 = { version = "0.11", features = ["zeroize"] }
+cfb-mode = { version = "0.8.2", features = ["zeroize"] }
+cipher = { version = "0.4.2", features = ["zeroize"] }
 const-oid = "0.9.6"
 crc24 = "0.1.6"
 curve25519-dalek = { version = "4.1.3", default-features = false, features = [
@@ -58,14 +58,14 @@ curve25519-dalek = { version = "4.1.3", default-features = false, features = [
     "precomputed-tables",
     "zeroize",
 ] }
-des = "0.8"
+des = { version = "0.8", features = ["zeroize"] }
 digest = "0.10.7"
 dsa = "0.6.3"
 ecdsa = "0.16.9"
 ed25519-dalek = { version = "2.1.1", default-features = false, features = ["std", "zeroize", "fast", "rand_core"] }
 elliptic-curve = "0.13"
 generic-array = "0.14.6"
-idea = "0.5"
+idea = { version = "0.5", features = ["zeroize"] }
 md-5 = { version = "0.10.5", features = ["oid"] }
 num_enum = { version = ">=0.5.7, < 0.8", default-features = false }
 num-traits = "0.2.19"
@@ -82,11 +82,11 @@ sha2 = { version = "0.10.6", features = ["oid"] }
 sha3 = { version = "0.10.8", features = ["oid"] }
 signature = "2.2"
 subtle = "2.6.1"
-twofish = "0.7"
+twofish = { version = "0.7", features = ["zeroize"] }
 zeroize = { version = "1.8", features = ["zeroize_derive"] }
 getrandom = { version = "0.2", optional = true }
 hkdf = "0.12.4"
-aes-gcm = "0.10.3"
+aes-gcm = { version = "0.10.3", features = ["zeroize"] }
 eax = "0.5.0"
 ocb3 = "0.1"
 aes-kw = { version = "0.2.1", features = ["std"] }
@@ -105,10 +105,18 @@ x25519-dalek = { version = "2.0.1", default-features = false, features = [
     "static_secrets",
 ] }
 
+# Not used directly: listed only to turn on `zeroize` for the key and keystream state that
+# aes-gcm, eax and ocb3 (ctr, ghash, cmac) and ml-dsa (shake) hold. Keep their
+# versions in step with what those crates resolve to, or the feature lands on a second copy.
+ctr = { version = "0.9.2", features = ["zeroize"] }
+ghash = { version = "0.5.1", features = ["zeroize"] }
+cmac = { version = "0.7.2", features = ["zeroize"] }
+
 # PQC
 ml-kem = { version = "0.2.1", features = ["zeroize", "deterministic"], optional = true }
 ml-dsa = { version = "0.1.1", default-features = false, features = ["alloc", "getrandom", "zeroize"], optional = true }
 slh-dsa = { version = "0.0.3", optional = true }
+shake = { version = "0.1", features = ["zeroize"], optional = true }
 replace_with = "0.1.8"
 
 # WASM helpers
@@ -144,7 +152,7 @@ wasm = ["getrandom", "getrandom/js", "web-time"]
 large-rsa = []
 malformed-artifact-compat = []
 
-pqc = ["dep:ml-kem", "dep:ml-dsa", "dep:slh-dsa"]
+pqc = ["dep:ml-kem", "dep:ml-dsa", "dep:slh-dsa", "dep:shake"]
 draft-wussler-openpgp-forwarding = []
 
 [profile.bench]
