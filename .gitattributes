@@ -1,0 +1,2 @@
+# Signed fixtures must stay byte-exact on every checkout.
+tests/pqc/fork-mldsa-* -text

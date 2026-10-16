@@ -125,6 +125,7 @@ fn main() -> pgp::errors::Result<()> {
 - `large-rsa`: Allow use of very large RSA keys (raises the limit from 8192 to 16384 bit)
 - `malformed-artifact-compat`: Be lenient towards some types of malformed artifacts (erroneously formed ECDH PKESK; invalidly short first partial body segments; embedded signatures that don't round-trip, which are kept verbatim as opaque subpackets so that the enclosing certificate remains importable - the affected subkey binding will not verify). Most users will NOT need this feature, should be disabled by default!
 - `pqc`: Enables implementation of PQC support as specified in RFC 9980 (this feature was previously called `draft-pqc`)
+  - In the Slurp9187/rpgp fork, `pqc` uses ml-dsa 0.1, which needs getrandom 0.4, so `pqc` together with `wasm` does not build for wasm32-unknown-unknown.
 - `draft-wussler-openpgp-forwarding`: Enables support for the formats and functionality from [draft-wussler-openpgp-forwarding](https://datatracker.ietf.org/doc/draft-wussler-openpgp-forwarding/)
 
 ## Current Status

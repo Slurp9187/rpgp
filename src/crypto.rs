@@ -30,6 +30,8 @@ pub mod x448;
 pub mod ml_dsa65_ed25519;
 #[cfg(feature = "pqc")]
 pub mod ml_dsa87_ed448;
+#[cfg(all(test, feature = "pqc"))]
+mod ml_dsa_acvp;
 #[cfg(feature = "pqc")]
 pub mod ml_kem1024_x448;
 #[cfg(feature = "pqc")]
