@@ -33,7 +33,31 @@ struct SigGen {
     message: String,
     context: String,
     signature: String,
+    #[serde(default)]
+    rnd: Option<String>,
 }
+
+/// Hands out the ACVP `rnd` value as the hedged signer's 32 random bytes, and nothing else.
+struct FixedRnd(Option<[u8; 32]>);
+
+impl ml_dsa::common::rand_core::TryRng for FixedRnd {
+    type Error = core::convert::Infallible;
+
+    fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+        unimplemented!("ML-DSA asks for 32 bytes")
+    }
+
+    fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+        unimplemented!("ML-DSA asks for 32 bytes")
+    }
+
+    fn try_fill_bytes(&mut self, dst: &mut [u8]) -> Result<(), Self::Error> {
+        dst.copy_from_slice(&self.0.take().expect("rnd used once"));
+        Ok(())
+    }
+}
+
+impl ml_dsa::common::rand_core::TryCryptoRng for FixedRnd {}
 
 #[derive(Deserialize)]
 struct SigVer {
@@ -95,6 +119,34 @@ macro_rules! acvp_tests {
                         let sk = ml_dsa::ExpandedSigningKey::<P>::from_expanded(&sk_bytes);
                         let sig = sk
                             .sign_deterministic(&unhex(&t.message), &unhex(&t.context))
+                            .unwrap();
+                        assert_eq!(sig.encode().as_slice(), &unhex(&t.signature)[..]);
+                        count += 1;
+                    }
+                }
+                assert!(count > 0);
+            }
+
+            #[test]
+            fn sig_gen_hedged() {
+                let mut count = 0;
+                for group in load::<SigGen>("ML-DSA-sigGen-FIPS204.json") {
+                    if group.parameter_set != $name || group.deterministic != Some(false) {
+                        continue;
+                    }
+                    for t in group.tests {
+                        let sk_bytes =
+                            ml_dsa::ExpandedSigningKeyBytes::<P>::try_from(&unhex(&t.sk)[..])
+                                .unwrap();
+                        #[allow(deprecated)]
+                        let sk = ml_dsa::ExpandedSigningKey::<P>::from_expanded(&sk_bytes);
+                        let rnd = unhex(t.rnd.as_deref().unwrap()).try_into().unwrap();
+                        let sig = sk
+                            .sign_randomized(
+                                &unhex(&t.message),
+                                &unhex(&t.context),
+                                &mut FixedRnd(Some(rnd)),
+                            )
                             .unwrap();
                         assert_eq!(sig.encode().as_slice(), &unhex(&t.signature)[..]);
                         count += 1;
