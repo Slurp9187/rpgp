@@ -109,8 +109,11 @@ impl SecretKey {
         match self.secret_params {
             SecretParams::Plain(ref k) => k.with(pub_params, |k| work(pub_params, k)),
             SecretParams::Encrypted(ref k) => {
-                let plain = k.unlock(pw, &self.details, Some(self.packet_header.tag()))?;
-                Ok(work(pub_params, &plain))
+                let out = k
+                    .unlock(pw, &self.details, Some(self.packet_header.tag()))
+                    .map(|plain| work(pub_params, &plain));
+                crate::util::burn_stack();
+                out
             }
         }
     }
@@ -205,8 +208,11 @@ impl SecretSubkey {
         match self.secret_params {
             SecretParams::Plain(ref k) => k.with(pub_params, |k| work(pub_params, k)),
             SecretParams::Encrypted(ref k) => {
-                let plain = k.unlock(pw, &self.details, Some(self.packet_header.tag()))?;
-                Ok(work(pub_params, &plain))
+                let out = k
+                    .unlock(pw, &self.details, Some(self.packet_header.tag()))
+                    .map(|plain| work(pub_params, &plain));
+                crate::util::burn_stack();
+                out
             }
         }
     }

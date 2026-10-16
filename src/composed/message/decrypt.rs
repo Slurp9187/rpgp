@@ -130,7 +130,7 @@ pub fn decrypt_session_key_with_password(
         });
     }
 
-    let decrypted_key = packet.decrypt(&key)?;
-
-    Ok(decrypted_key)
+    let decrypted_key = packet.decrypt(&key);
+    crate::util::burn_stack();
+    decrypted_key
 }

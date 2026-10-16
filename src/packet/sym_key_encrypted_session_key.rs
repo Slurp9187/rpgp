@@ -7,7 +7,7 @@ use log::debug;
 use proptest::prelude::*;
 use rand::{CryptoRng, Rng};
 use sha2::Sha256;
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::{
     composed::{PlainSessionKey, RawSessionKey},
@@ -176,11 +176,18 @@ impl SymKeyEncryptedSessionKey {
             unsupported_err!("SKESK {:?}", self.version());
         };
 
+        // Wiped on every return path below: it ends up holding the session key.
         let mut decrypted_key: BytesMut = decrypted_key.clone().into();
+        let result = self.decrypt_in_place(key, &mut decrypted_key);
+        decrypted_key.zeroize();
+        result
+    }
+
+    fn decrypt_in_place(&self, key: &[u8], decrypted_key: &mut BytesMut) -> Result<PlainSessionKey> {
         match self {
             Self::V4 { sym_algorithm, .. } => {
                 let iv = vec![0u8; sym_algorithm.block_size()];
-                sym_algorithm.decrypt_with_iv_regular(key, &iv, &mut decrypted_key)?;
+                sym_algorithm.decrypt_with_iv_regular(key, &iv, decrypted_key)?;
 
                 let sym_alg = SymmetricKeyAlgorithm::from(decrypted_key[0]);
                 let key = RawSessionKey::from(&decrypted_key[1..]);
@@ -219,7 +226,7 @@ impl SymKeyEncryptedSessionKey {
                 ];
 
                 // AEAD decrypt
-                alg.decrypt_in_place(sym_algorithm, ikm, aead.iv(), &info, &mut decrypted_key)?;
+                alg.decrypt_in_place(sym_algorithm, ikm, aead.iv(), &info, decrypted_key)?;
 
                 Ok(PlainSessionKey::V5 {
                     key: RawSessionKey::from(decrypted_key.to_vec()),
@@ -244,11 +251,11 @@ impl SymKeyEncryptedSessionKey {
                 ];
 
                 let hk = hkdf::Hkdf::<Sha256>::new(salt, ikm);
-                let mut okm = [0u8; 42];
-                hk.expand(&info, &mut okm).expect("42");
+                let mut okm = Zeroizing::new([0u8; 42]);
+                hk.expand(&info, &mut okm[..]).expect("42");
 
                 // AEAD decrypt
-                alg.decrypt_in_place(sym_algorithm, &okm, aead.iv(), &info, &mut decrypted_key)?;
+                alg.decrypt_in_place(sym_algorithm, &okm[..], aead.iv(), &info, decrypted_key)?;
 
                 Ok(PlainSessionKey::V6 {
                     key: decrypted_key.to_vec().into(),
@@ -358,15 +365,15 @@ impl SymKeyEncryptedSessionKey {
         ];
 
         let hk = hkdf::Hkdf::<Sha256>::new(salt, ikm.as_ref());
-        let mut okm = [0u8; 42];
-        hk.expand(&info, &mut okm).expect("42");
+        let mut okm = Zeroizing::new([0u8; 42]);
+        hk.expand(&info, &mut okm[..]).expect("42");
 
         let mut iv = vec![0; aead.iv_size()];
         rng.fill_bytes(&mut iv);
 
         // AEAD encrypt
         let mut encrypted_key: BytesMut = session_key.as_ref().into();
-        aead.encrypt_in_place(&sym_algorithm, &okm, &iv, &info, &mut encrypted_key)?;
+        aead.encrypt_in_place(&sym_algorithm, &okm[..], &iv, &info, &mut encrypted_key)?;
 
         let aead = match aead {
             AeadAlgorithm::Eax => AeadProps::Eax {

@@ -199,6 +199,9 @@ fn residue(op: impl FnOnce()) -> usize {
 /// A passphrase long enough to make a unique needle.
 const PASSPHRASE: &str = "residue-canary-passphrase-0123456789";
 
+/// The session key of every message the tests encrypt (AES-256).
+const SESSION_KEY: [u8; 32] = *b"residue-canary-session-key-01234";
+
 /// Wipes on drop, so the test's own copies of the secrets are no residue.
 struct Secrets(Vec<zeroize::Zeroizing<Vec<u8>>>);
 
@@ -338,7 +341,12 @@ fn case(version: KeyVersion, primary: KeyType, sub: KeyType, how: Protection) ->
     Case { key, bytes, how }
 }
 
-/// Arms the needles for `case`: its secrets, plus the passphrase if it has one.
+/// Arms the needles for `case`: its secrets, and the passphrase if it has one.
+///
+/// Not the session key: in a whole-message decryption the message reader's state can hold a
+/// stale copy of it, and that has the same sensitivity as the message's plaintext, which the
+/// reader's buffers and the caller hold too. The session key paths are tested on their own in
+/// [`pkesk`] and [`skesk`].
 fn arm_needles(case: &Case) -> Secrets {
     let secrets = secrets_of(&case.key, &password(case.how));
     let mut all: Vec<&[u8]> = secrets.0.iter().map(|s| &s[..]).collect();
@@ -382,6 +390,7 @@ fn op_decrypt(case: &Case) -> impl FnOnce() + '_ {
     let pub_key = case.key.to_public_key();
     let mut builder =
         MessageBuilder::from_bytes("", MESSAGE).seipd_v1(&mut rng, SymmetricKeyAlgorithm::AES256);
+    builder.set_session_key(SESSION_KEY[..].into()).unwrap();
     builder
         .encrypt_to_key(&mut rng, &pub_key.public_subkeys[0])
         .unwrap();
@@ -477,6 +486,172 @@ fn ml_dsa65_ml_kem768() {
         KeyType::MlDsa65Ed25519,
         KeyType::MlKem768X25519,
     );
+}
+
+/// Decrypting a PKESK with the key's encryption subkey leaves neither the key's secrets nor the
+/// session key behind, for each EFV key type, unprotected and CFB-protected.
+#[test]
+fn pkesk() {
+    use pgp::{
+        composed::RawSessionKey, packet::PublicKeyEncryptedSessionKey, types::DecryptionKey,
+        types::EskType,
+    };
+
+    let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut results = Vec::new();
+    let types: Vec<(KeyVersion, KeyType, KeyType)> = vec![
+        (
+            KeyVersion::V4,
+            KeyType::Ed25519Legacy,
+            KeyType::ECDH(pgp::crypto::ecc_curve::ECCCurve::Curve25519Legacy),
+        ),
+        (KeyVersion::V6, KeyType::Ed25519, KeyType::X25519),
+        (KeyVersion::V4, KeyType::Rsa(2048), KeyType::Rsa(2048)),
+        #[cfg(feature = "pqc")]
+        (
+            KeyVersion::V6,
+            KeyType::MlDsa65Ed25519,
+            KeyType::MlKem768X25519,
+        ),
+    ];
+    for (version, primary, sub) in types {
+        for how in [Protection::None, Protection::Cfb] {
+            let case = case(version, primary.clone(), sub.clone(), how);
+            let mut rng = ChaCha8Rng::seed_from_u64(8);
+            let sk = RawSessionKey::from(&SESSION_KEY[..]);
+            let enc = &case.key.to_public_key().public_subkeys[0];
+            let (pkesk, typ) = if version == KeyVersion::V6 {
+                let p = PublicKeyEncryptedSessionKey::from_session_key_v6(&mut rng, &sk, enc);
+                (p.unwrap(), EskType::V6)
+            } else {
+                let p = PublicKeyEncryptedSessionKey::from_session_key_v3(
+                    &mut rng,
+                    &sk,
+                    SymmetricKeyAlgorithm::AES256,
+                    enc,
+                );
+                (p.unwrap(), EskType::V3_4)
+            };
+            drop(sk);
+
+            let secrets = secrets_of(&case.key, &password(case.how));
+            let mut needles: Vec<&[u8]> = secrets.0.iter().map(|s| &s[..]).collect();
+            // Not for RSA: rsa 0.9's PKCS#1 v1.5 decryption frees its padded block, which holds
+            // the session key, unwiped (upstream; EFV refuses RSA secret keys). The RSA key's
+            // own secrets are still checked.
+            if !matches!(sub, KeyType::Rsa(_)) {
+                needles.push(&SESSION_KEY);
+            }
+            set_needles(&needles);
+            let hits = residue(|| {
+                let key = SignedSecretKey::from_bytes(&case.bytes[..]).unwrap();
+                let plain = key.secret_subkeys[0]
+                    .key
+                    .decrypt(&password(case.how), pkesk.values().unwrap(), typ)
+                    .unwrap()
+                    .unwrap();
+                drop(plain);
+                drop(key);
+            });
+            clear_needles();
+            let name = format!("{sub:?} {how:?} PKESK decrypt");
+            eprintln!("{name}: {hits}");
+            results.push((name, hits));
+        }
+    }
+    assert_clean(&results);
+}
+
+/// Password-encrypted session keys (SKESK v4 and v6): making one and decrypting one leave
+/// neither the passphrase nor the session key behind. Whole password-encrypted messages
+/// (SEIPD v1 and v2) leave no passphrase behind.
+#[test]
+fn skesk() {
+    use pgp::{
+        composed::{decrypt_session_key_with_password, Message, RawSessionKey},
+        crypto::aead::{AeadAlgorithm, ChunkSize},
+        packet::SymKeyEncryptedSessionKey,
+    };
+
+    let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut results = Vec::new();
+    let pw = || Password::from(PASSPHRASE);
+    let s2k_iterated =
+        || StringToKey::new_iterated(ChaCha8Rng::seed_from_u64(4), HashAlgorithm::Sha256, 96);
+    let s2k_argon2 = || StringToKey::Argon2 {
+        salt: [5; 16],
+        t: 1,
+        p: 1,
+        m_enc: 3,
+    };
+    let mut record = |name: &str, needles: &[&[u8]], op: &dyn Fn()| {
+        set_needles(needles);
+        let hits = residue(op);
+        clear_needles();
+        eprintln!("{name}: {hits}");
+        results.push((name.to_string(), hits));
+    };
+    let both: [&[u8]; 2] = [PASSPHRASE.as_bytes(), &SESSION_KEY];
+
+    let make_v4 = || {
+        let sk = RawSessionKey::from(&SESSION_KEY[..]);
+        SymKeyEncryptedSessionKey::encrypt_v4(&pw(), &sk, s2k_iterated(), SymmetricKeyAlgorithm::AES256)
+            .unwrap()
+    };
+    let make_v6 = || {
+        let sk = RawSessionKey::from(&SESSION_KEY[..]);
+        SymKeyEncryptedSessionKey::encrypt_v6(
+            ChaCha8Rng::seed_from_u64(6),
+            &pw(),
+            &sk,
+            s2k_argon2(),
+            SymmetricKeyAlgorithm::AES256,
+            AeadAlgorithm::Ocb,
+        )
+        .unwrap()
+    };
+    record("SKESK v4 make", &both, &|| drop(make_v4()));
+    record("SKESK v6 make", &both, &|| drop(make_v6()));
+    let (v4, v6) = (make_v4(), make_v6());
+    record("SKESK v4 decrypt", &both, &|| {
+        drop(decrypt_session_key_with_password(&v4, &pw()).unwrap())
+    });
+    record("SKESK v6 decrypt", &both, &|| {
+        drop(decrypt_session_key_with_password(&v6, &pw()).unwrap())
+    });
+
+    let encrypt_v1 = || {
+        let mut rng = ChaCha8Rng::seed_from_u64(5);
+        let mut builder = MessageBuilder::from_bytes("", MESSAGE)
+            .seipd_v1(&mut rng, SymmetricKeyAlgorithm::AES256);
+        builder.encrypt_with_password(s2k_iterated(), &pw()).unwrap();
+        builder.to_vec(&mut rng).unwrap()
+    };
+    let encrypt_v2 = || {
+        let mut rng = ChaCha8Rng::seed_from_u64(6);
+        let mut builder = MessageBuilder::from_bytes("", MESSAGE).seipd_v2(
+            &mut rng,
+            SymmetricKeyAlgorithm::AES256,
+            AeadAlgorithm::Ocb,
+            ChunkSize::default(),
+        );
+        builder
+            .encrypt_with_password(&mut rng, s2k_argon2(), &pw())
+            .unwrap();
+        builder.to_vec(&mut rng).unwrap()
+    };
+    let decrypt = |encrypted: &[u8]| {
+        let msg = Message::from_bytes(encrypted).unwrap();
+        let mut msg = msg.decrypt_with_password(&pw()).unwrap();
+        assert_eq!(msg.as_data_vec().unwrap(), MESSAGE);
+    };
+    let pass: [&[u8]; 1] = [PASSPHRASE.as_bytes()];
+    record("SEIPD v1 password encrypt", &pass, &|| drop(encrypt_v1()));
+    record("SEIPD v2 password encrypt", &pass, &|| drop(encrypt_v2()));
+    let (m1, m2) = (encrypt_v1(), encrypt_v2());
+    record("SEIPD v1 password decrypt", &pass, &|| decrypt(&m1));
+    record("SEIPD v2 password decrypt", &pass, &|| decrypt(&m2));
+    assert_clean(&results);
 }
 
 /// The harness itself: a secret left in a freed buffer must be found.

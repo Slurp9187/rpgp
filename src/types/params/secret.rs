@@ -49,8 +49,9 @@ impl PlainSecret {
         public_params: &PublicParams,
         f: impl FnOnce(&PlainSecretParams) -> T,
     ) -> Result<T> {
-        let params = PlainSecretParams::from_raw(&self.raw, self.alg, public_params)?;
-        Ok(f(&params))
+        let out = PlainSecretParams::from_raw(&self.raw, self.alg, public_params).map(|p| f(&p));
+        crate::util::burn_stack();
+        out
     }
 
     fn string_to_key_id(&self) -> u8 {
@@ -112,7 +113,9 @@ impl SecretParams {
         alg: PublicKeyAlgorithm,
         params: &PublicParams,
     ) -> Result<Self> {
-        let params = parse_secret_fields(key_ver, alg, params, data)?;
+        let params = parse_secret_fields(key_ver, alg, params, data);
+        crate::util::burn_stack();
+        let params = params?;
 
         // Version 6 secret keys may only use "S2K Usage" 0, 253 or 254
         //

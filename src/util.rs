@@ -47,6 +47,23 @@ pub(crate) fn fill_buffer_bytes<R: std::io::BufRead>(
     Ok(read_total)
 }
 
+/// How much stack [`burn_stack`] overwrites.
+const BURN_STACK_SIZE: usize = 64 * 1024;
+
+/// Overwrites the stack below the caller with zeros.
+///
+/// Secret material passes through stack frames that nothing can wipe: digest and cipher state,
+/// arguments passed by value, moved-from locals. Once those frames return their bytes stay on
+/// the stack, and a large value built later in the same place carries them into the heap in
+/// its unused space. Called after an operation on secret material returns, this overwrites
+/// the region its callees used.
+#[inline(never)]
+pub(crate) fn burn_stack() {
+    let mut buf = [0u8; BURN_STACK_SIZE];
+    zeroize::Zeroize::zeroize(&mut buf[..]);
+    std::hint::black_box(&buf);
+}
+
 /// A fixed-size read buffer that never reallocates and wipes its whole allocation on drop.
 ///
 /// Packet bodies pass through it, and a secret key packet's body is secret key material. A

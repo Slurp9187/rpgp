@@ -406,6 +406,12 @@ impl StringToKey {
     /// - Implementations MUST NOT decrypt a secret using MD5, SHA-1, or RIPEMD-160 as a hash
     ///   function in an S2K KDF in a version 6 (or later) packet.
     pub fn derive_key(&self, passphrase: &[u8], key_size: usize) -> Result<RawSessionKey> {
+        let key = self.derive_key_inner(passphrase, key_size);
+        crate::util::burn_stack();
+        key
+    }
+
+    fn derive_key_inner(&self, passphrase: &[u8], key_size: usize) -> Result<RawSessionKey> {
         let key = match self {
             Self::Simple { hash_alg, .. }
             | Self::Salted { hash_alg, .. }
