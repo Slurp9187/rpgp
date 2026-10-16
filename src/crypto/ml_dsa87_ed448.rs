@@ -106,10 +106,12 @@ impl Signer for SecretKey {
 
         let ed448_sig = self.ed448.sign(digest);
         let mut bytes = ed448_sig.to_bytes().to_vec();
+        // Hedged ML-DSA.Sign with fresh randomness, as RFC 9980 §5.2 specifies; the deterministic
+        // variant gives up the side-channel resistance §9.3 describes.
         let ml_dsa_sig = self
             .ml_dsa
             .expanded_key()
-            .sign_deterministic(digest, &[])
+            .sign_randomized(digest, &[], &mut ml_dsa::common::getrandom::SysRng)
             .map_err(|e| format_err!("ML-DSA signing failed: {}", e))?;
         bytes.extend_from_slice(&ml_dsa_sig.encode());
 
@@ -180,30 +182,25 @@ mod tests {
         SecretKey::try_from_bytes([0x24; 57], [0x42; 32]).unwrap()
     }
 
-    #[test]
-    fn verifies_ml_dsa_0_0_4_signature() {
-        let key = fixture_key();
-        let public = crate::types::MlDsa87Ed448PublicParams::from(&key);
+    fn verify_with(public: &crate::types::MlDsa87Ed448PublicParams, sig: &[u8]) -> Result<()> {
         verify(
             &public.ed448,
             &public.ml_dsa,
             HashAlgorithm::Sha3_512,
             &DIGEST,
-            SIG_0_0_4,
+            sig,
         )
-        .unwrap();
+    }
+
+    #[test]
+    fn verifies_ml_dsa_0_0_4_signature() {
+        let public = (&fixture_key()).into();
+        verify_with(&public, SIG_0_0_4).unwrap();
 
         // Flipping a byte of the ML-DSA half must fail.
         let mut tampered = SIG_0_0_4.to_vec();
         tampered[114 + 100] ^= 1;
-        assert!(verify(
-            &public.ed448,
-            &public.ml_dsa,
-            HashAlgorithm::Sha3_512,
-            &DIGEST,
-            &tampered,
-        )
-        .is_err());
+        assert!(verify_with(&public, &tampered).is_err());
     }
 
     #[test]
@@ -212,14 +209,26 @@ mod tests {
         assert_eq!(key.as_bytes().1, &[0x42; 32]);
     }
 
-    #[test]
-    fn deterministic_matches_ml_dsa_0_0_4() {
-        let SignatureBytes::Native(sig) = fixture_key()
-            .sign(HashAlgorithm::Sha3_512, &DIGEST)
-            .unwrap()
+    fn sign(key: &SecretKey) -> Vec<u8> {
+        let SignatureBytes::Native(sig) = key.sign(HashAlgorithm::Sha3_512, &DIGEST).unwrap()
         else {
             panic!("expected native signature bytes");
         };
-        assert_eq!(&sig[..], SIG_0_0_4);
+        sig.to_vec()
+    }
+
+    #[test]
+    fn hedged_signatures_differ_and_verify() {
+        let key = fixture_key();
+        let public = (&key).into();
+        let (a, b) = (sign(&key), sign(&key));
+        assert_ne!(a, b, "hedged signing must not repeat");
+        assert_ne!(
+            a, SIG_0_0_4,
+            "hedged signing must not match the deterministic signature"
+        );
+        for sig in [a, b] {
+            verify_with(&public, &sig).unwrap();
+        }
     }
 }
