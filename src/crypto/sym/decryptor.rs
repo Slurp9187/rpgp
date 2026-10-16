@@ -724,6 +724,10 @@ mod debug_tests {
         let protected = MaybeProtected::Unprotected {
             key: Zeroizing::new(SECRET.to_vec()),
         };
-        assert_redacted(&format!("{protected:?}"), SECRET, "MaybeProtected::Unprotected");
+        assert_redacted(
+            &format!("{protected:?}"),
+            SECRET,
+            "MaybeProtected::Unprotected",
+        );
     }
 }

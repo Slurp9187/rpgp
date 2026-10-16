@@ -275,8 +275,8 @@ impl StringToKey {
                 /// Converts a coded iteration count into a decoded count.
                 /// Ref: https://www.rfc-editor.org/rfc/rfc9580.html#section-3.7.1.3-3
                 fn decode_count(coded_count: u8) -> usize {
-                    ((16u32 + u32::from(coded_count & 15)) << (u32::from(coded_count >> 4) + EXPBIAS))
-                        as usize
+                    ((16u32 + u32::from(coded_count & 15))
+                        << (u32::from(coded_count >> 4) + EXPBIAS)) as usize
                 }
 
                 let data_size = salt.len() + passphrase.len();

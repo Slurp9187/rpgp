@@ -63,7 +63,8 @@ impl SecretKey {
 
     /// The slh-dsa signing key, rebuilt from the bytes (checked when they were taken in).
     fn signing_key(&self) -> slh_dsa::SigningKey<Shake128s> {
-        slh_dsa::SigningKey::<Shake128s>::try_from(&self.bytes[..]).expect("checked on construction")
+        slh_dsa::SigningKey::<Shake128s>::try_from(&self.bytes[..])
+            .expect("checked on construction")
     }
 }
 

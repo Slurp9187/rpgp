@@ -135,8 +135,9 @@ pub trait BufReadParsing: BufRead + Sized {
             }
             let n = buf.len();
             if out.len() + n > out.capacity() {
-                let mut bigger =
-                    zeroize::Zeroizing::new(Vec::with_capacity((out.len() + n).max(2 * out.capacity())));
+                let mut bigger = zeroize::Zeroizing::new(Vec::with_capacity(
+                    (out.len() + n).max(2 * out.capacity()),
+                ));
                 bigger.extend_from_slice(&out);
                 out = bigger;
             }

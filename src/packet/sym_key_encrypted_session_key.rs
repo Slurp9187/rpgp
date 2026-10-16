@@ -183,7 +183,11 @@ impl SymKeyEncryptedSessionKey {
         result
     }
 
-    fn decrypt_in_place(&self, key: &[u8], decrypted_key: &mut BytesMut) -> Result<PlainSessionKey> {
+    fn decrypt_in_place(
+        &self,
+        key: &[u8],
+        decrypted_key: &mut BytesMut,
+    ) -> Result<PlainSessionKey> {
         match self {
             Self::V4 { sym_algorithm, .. } => {
                 let iv = vec![0u8; sym_algorithm.block_size()];

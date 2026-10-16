@@ -22,7 +22,10 @@ pub(crate) fn assert_redacted(out: &str, secret: &[u8], what: &str) {
     let list = format!("{:?}", &secret[..8]);
     let list = list.trim_start_matches('[').trim_end_matches(']');
     for form in [&hex[..16], &upper[..16], list] {
-        assert!(!out.contains(form), "{what}: Debug output contains {form:?}: {out}");
+        assert!(
+            !out.contains(form),
+            "{what}: Debug output contains {form:?}: {out}"
+        );
     }
 }
 
@@ -33,7 +36,11 @@ fn opaque_secret_variants_are_redacted() {
         data: Zeroizing::new(SECRET.to_vec()),
         pub_params: Bytes::new(),
     };
-    assert_redacted(&format!("{unknown:?}"), SECRET, "PlainSecretParams::Unknown");
+    assert_redacted(
+        &format!("{unknown:?}"),
+        SECRET,
+        "PlainSecretParams::Unknown",
+    );
 
     let ecdh = ecdh::SecretKey::Unsupported {
         curve: ECCCurve::BrainpoolP256r1,
@@ -45,13 +52,21 @@ fn opaque_secret_variants_are_redacted() {
         curve: ECCCurve::BrainpoolP256r1,
         mpi_data: BytesMut::from(SECRET),
     };
-    assert_redacted(&format!("{ecdsa:?}"), SECRET, "ecdsa::SecretKey::Unsupported");
+    assert_redacted(
+        &format!("{ecdsa:?}"),
+        SECRET,
+        "ecdsa::SecretKey::Unsupported",
+    );
 
     let eddsa = eddsa_legacy::SecretKey::Unsupported {
         curve: ECCCurve::BrainpoolP256r1,
         opaque: BytesMut::from(SECRET),
     };
-    assert_redacted(&format!("{eddsa:?}"), SECRET, "eddsa_legacy::SecretKey::Unsupported");
+    assert_redacted(
+        &format!("{eddsa:?}"),
+        SECRET,
+        "eddsa_legacy::SecretKey::Unsupported",
+    );
 }
 
 #[test]

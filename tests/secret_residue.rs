@@ -28,9 +28,7 @@ use pgp::{
     },
     crypto::{hash::HashAlgorithm, sym::SymmetricKeyAlgorithm},
     ser::Serialize,
-    types::{
-        KeyVersion, Password, PlainSecretParams, S2kParams, StringToKey,
-    },
+    types::{KeyVersion, Password, PlainSecretParams, S2kParams, StringToKey},
 };
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
@@ -163,7 +161,10 @@ static LOCK: Mutex<()> = Mutex::new(());
 fn set_needles(secrets: &[&[u8]]) {
     assert!(secrets.len() <= MAX_NEEDLES);
     for (n, s) in secrets.iter().enumerate() {
-        assert!(s.len() >= NEEDLE_LEN, "secret {n} is too short for a needle");
+        assert!(
+            s.len() >= NEEDLE_LEN,
+            "secret {n} is too short for a needle"
+        );
         let off = (s.len() - NEEDLE_LEN) / 2;
         for i in 0..NEEDLE_LEN {
             NEEDLES[n * NEEDLE_LEN + i].store(s[off + i], Ordering::Relaxed);
@@ -316,7 +317,9 @@ fn protect(key: &mut SignedSecretKey, how: Protection) {
         .expect("protect primary");
     for sub in &mut key.secret_subkeys {
         let p = s2k(rng);
-        sub.key.set_password_with_s2k(&pw, p).expect("protect subkey");
+        sub.key
+            .set_password_with_s2k(&pw, p)
+            .expect("protect subkey");
     }
 }
 
@@ -438,20 +441,34 @@ fn all_ops(version: KeyVersion, primary: KeyType, sub: KeyType) {
     let mut results = Vec::new();
     for how in [Protection::None, Protection::Cfb, Protection::Argon2Aead] {
         let case = case(version, primary.clone(), sub.clone(), how);
-        run(&mut results, &case, format!("{primary:?} {how:?} parse"), || {
-            op_parse(&case)
-        });
-        run(&mut results, &case, format!("{primary:?} {how:?} sign"), || {
-            op_sign(&case)
-        });
+        run(
+            &mut results,
+            &case,
+            format!("{primary:?} {how:?} parse"),
+            || op_parse(&case),
+        );
+        run(
+            &mut results,
+            &case,
+            format!("{primary:?} {how:?} sign"),
+            || op_sign(&case),
+        );
         let decrypt = op_decrypt(&case);
-        run(&mut results, &case, format!("{sub:?} {how:?} decrypt"), decrypt);
+        run(
+            &mut results,
+            &case,
+            format!("{sub:?} {how:?} decrypt"),
+            decrypt,
+        );
     }
     let plain = case(version, primary.clone(), sub.clone(), Protection::None);
     for how in [Protection::Cfb, Protection::Argon2Aead] {
-        run(&mut results, &plain, format!("{primary:?} protect {how:?}"), || {
-            op_protect(&plain, how)
-        });
+        run(
+            &mut results,
+            &plain,
+            format!("{primary:?} protect {how:?}"),
+            || op_protect(&plain, how),
+        );
     }
     assert_clean(&results);
 }
@@ -607,8 +624,13 @@ fn skesk() {
 
     let make_v4 = || {
         let sk = RawSessionKey::from(&SESSION_KEY[..]);
-        SymKeyEncryptedSessionKey::encrypt_v4(&pw(), &sk, s2k_iterated(), SymmetricKeyAlgorithm::AES256)
-            .unwrap()
+        SymKeyEncryptedSessionKey::encrypt_v4(
+            &pw(),
+            &sk,
+            s2k_iterated(),
+            SymmetricKeyAlgorithm::AES256,
+        )
+        .unwrap()
     };
     let make_v6 = || {
         let sk = RawSessionKey::from(&SESSION_KEY[..]);
@@ -636,7 +658,9 @@ fn skesk() {
         let mut rng = ChaCha8Rng::seed_from_u64(5);
         let mut builder = MessageBuilder::from_bytes("", MESSAGE)
             .seipd_v1(&mut rng, SymmetricKeyAlgorithm::AES256);
-        builder.encrypt_with_password(s2k_iterated(), &pw()).unwrap();
+        builder
+            .encrypt_with_password(s2k_iterated(), &pw())
+            .unwrap();
         builder.to_vec(&mut rng).unwrap()
     };
     let encrypt_v2 = || {
@@ -671,9 +695,7 @@ fn skesk() {
 #[cfg(feature = "pqc")]
 #[test]
 fn crypto_keys_wipe_on_drop() {
-    use pgp::crypto::{
-        ml_kem1024_x448, slh_dsa_shake128f, slh_dsa_shake128s, slh_dsa_shake256s,
-    };
+    use pgp::crypto::{ml_kem1024_x448, slh_dsa_shake128f, slh_dsa_shake128s, slh_dsa_shake256s};
 
     let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let mut results = Vec::new();
@@ -723,4 +745,3 @@ fn harness_finds_residue() {
     assert_eq!(hits, 1, "an unwiped copy must be found");
     assert_eq!(hits_wiped, 0, "a wiped copy must not be found");
 }
-

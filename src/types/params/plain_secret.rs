@@ -355,7 +355,8 @@ impl PlainSecretParams {
                     KeyVersion::V4 | KeyVersion::V6 => {
                         // Room for the checksum up front: growing would leave a plaintext copy
                         // behind. Wiped if anything fails before it is encrypted.
-                        let mut data = Zeroizing::new(Vec::with_capacity(self.write_len_raw() + 20));
+                        let mut data =
+                            Zeroizing::new(Vec::with_capacity(self.write_len_raw() + 20));
                         self.to_writer_raw(&mut *data).expect("preallocated vector");
 
                         data.extend_from_slice(&self.checksum_sha1()?[..]);
