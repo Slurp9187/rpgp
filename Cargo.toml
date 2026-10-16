@@ -106,10 +106,14 @@ x25519-dalek = { version = "2.0.1", default-features = false, features = [
 ] }
 
 # Not used directly: listed only to turn on `zeroize` for the key and keystream state that
-# aes-gcm, eax and ocb3 (ctr, ghash, cmac) and ml-dsa (shake) hold. Keep their
+# aes-gcm, eax and ocb3 (ctr, ghash, polyval, cmac) and ml-dsa (shake) hold. Keep their
 # versions in step with what those crates resolve to, or the feature lands on a second copy.
 ctr = { version = "0.9.2", features = ["zeroize"] }
 ghash = { version = "0.5.1", features = ["zeroize"] }
+# `zeroize` here is the implicit feature of polyval's optional zeroize dependency. It wipes
+# GHASH's key on the soft backend; on x86 the autodetect backend never runs that Drop,
+# and its aarch64 (pmull) backend has no wipe at all (polyval 0.6.2).
+polyval = { version = "0.6.2", features = ["zeroize"] }
 cmac = { version = "0.7.2", features = ["zeroize"] }
 
 # PQC
