@@ -654,6 +654,45 @@ fn skesk() {
     assert_clean(&results);
 }
 
+/// The `crypto` secret key types that claim `ZeroizeOnDrop` really wipe: each is boxed (so it
+/// is freed whole, through the scanning allocator) and dropped armed.
+#[cfg(feature = "pqc")]
+#[test]
+fn crypto_keys_wipe_on_drop() {
+    use pgp::crypto::{
+        ml_kem1024_x448, slh_dsa_shake128f, slh_dsa_shake128s, slh_dsa_shake256s,
+    };
+
+    let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let mut results = Vec::new();
+    let mut check = |name: &str, secret: &[u8], key: Box<dyn std::any::Any>| {
+        set_needles(&[secret]);
+        let hits = residue(|| drop(key));
+        clear_needles();
+        eprintln!("{name}: {hits}");
+        results.push((name.to_string(), hits));
+    };
+    let rng = || ChaCha8Rng::seed_from_u64(11);
+
+    // SLH-DSA: the secret half is SK.seed || SK.prf, the first half of the serialized key.
+    let k = slh_dsa_shake128s::SecretKey::generate(rng());
+    let b = zeroize::Zeroizing::new(k.to_bytes());
+    check("SLH-DSA-SHAKE-128s", &b[..32], Box::new(k));
+    let k = slh_dsa_shake128f::SecretKey::generate(rng());
+    let b = zeroize::Zeroizing::new(k.to_bytes());
+    check("SLH-DSA-SHAKE-128f", &b[..32], Box::new(k));
+    let k = slh_dsa_shake256s::SecretKey::generate(rng());
+    let b = zeroize::Zeroizing::new(k.to_bytes());
+    check("SLH-DSA-SHAKE-256s", &b[..64], Box::new(k));
+
+    // ML-KEM-1024+X448: the X448 half.
+    let k = ml_kem1024_x448::SecretKey::generate(rng());
+    let x = zeroize::Zeroizing::new(*k.as_bytes().0);
+    check("ML-KEM-1024+X448 (X448 half)", &x[..], Box::new(k));
+
+    assert_clean(&results);
+}
+
 /// The harness itself: a secret left in a freed buffer must be found.
 #[test]
 fn harness_finds_residue() {

@@ -1,7 +1,7 @@
 use rand::{CryptoRng, Rng};
 use signature::{Signer as _, Verifier};
 use slh_dsa::Shake128s;
-use zeroize::ZeroizeOnDrop;
+use zeroize::{ZeroizeOnDrop, Zeroizing};
 
 use crate::{
     crypto::{hash::HashAlgorithm, Signer},
@@ -14,27 +14,25 @@ use crate::{
 pub const KEY_LEN: usize = 64;
 
 /// Secret key for SLH DSA Shake128s
+///
+/// Held as its serialized bytes, which wipe on drop: slh-dsa 0.0.3's `SigningKey` can't wipe
+/// itself, so one is rebuilt on the stack for each use.
 #[derive(Clone, PartialEq, derive_more::Debug)]
 pub struct SecretKey {
-    /// The secret key.
+    /// The serialized secret key.
     #[debug("..")]
-    key: slh_dsa::SigningKey<Shake128s>,
+    bytes: Zeroizing<[u8; KEY_LEN]>,
 }
 
 impl Eq for SecretKey {}
 
+/// The bytes are `Zeroizing`.
 impl ZeroizeOnDrop for SecretKey {}
-
-impl Drop for SecretKey {
-    fn drop(&mut self) {
-        // TODO: zeroize, fixed in latest `master`
-    }
-}
 
 impl From<&SecretKey> for SlhDsaShake128sPublicParams {
     fn from(value: &SecretKey) -> Self {
         Self {
-            key: value.key.as_ref().clone(),
+            key: value.signing_key().as_ref().clone(),
         }
     }
 }
@@ -42,21 +40,30 @@ impl From<&SecretKey> for SlhDsaShake128sPublicParams {
 impl SecretKey {
     /// Generate an Ed448 `SecretKey`.
     pub fn generate<R: Rng + CryptoRng>(mut rng: R) -> Self {
-        let key = slh_dsa::SigningKey::new(&mut rng);
+        let key = slh_dsa::SigningKey::<Shake128s>::new(&mut rng);
 
-        SecretKey { key }
+        SecretKey {
+            bytes: Zeroizing::new(key.to_bytes().into()),
+        }
     }
 
     /// Create a key from the raw byte values
     pub fn try_from_bytes(seed: [u8; KEY_LEN]) -> Result<Self> {
-        let key = slh_dsa::SigningKey::<Shake128s>::try_from(&seed[..])
+        slh_dsa::SigningKey::<Shake128s>::try_from(&seed[..])
             .map_err(|e| format_err!("invalid key {:?}", e))?;
-        Ok(Self { key })
+        Ok(Self {
+            bytes: Zeroizing::new(seed),
+        })
     }
 
     /// Returns the secret key in their raw byte level representation.
     pub fn to_bytes(&self) -> [u8; KEY_LEN] {
-        self.key.to_bytes().into()
+        *self.bytes
+    }
+
+    /// The slh-dsa signing key, rebuilt from the bytes (checked when they were taken in).
+    fn signing_key(&self) -> slh_dsa::SigningKey<Shake128s> {
+        slh_dsa::SigningKey::<Shake128s>::try_from(&self.bytes[..]).expect("checked on construction")
     }
 }
 
@@ -72,7 +79,7 @@ impl Signer for SecretKey {
             "invalid hash algorithm"
         );
 
-        let sig = self.key.sign(digest);
+        let sig = self.signing_key().sign(digest);
         let bytes = sig.to_bytes();
 
         Ok(SignatureBytes::Native(bytes.to_vec().into()))

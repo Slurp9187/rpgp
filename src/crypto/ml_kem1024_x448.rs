@@ -8,7 +8,7 @@ use ml_kem::{
 };
 use rand::{CryptoRng, Rng};
 use sha3::{Digest, Sha3_256};
-use zeroize::{ZeroizeOnDrop, Zeroizing};
+use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 use crate::{
     crypto::{aes_kw, public_key::PublicKeyAlgorithm, Decryptor},
@@ -32,6 +32,13 @@ pub struct SecretKey {
     /// Seed `d` and `z`
     #[debug("..")]
     ml_kem_seed: (Zeroizing<[u8; 32]>, Zeroizing<[u8; 32]>),
+}
+
+/// cx448's `Secret` is `Copy` and has no `Drop`, so the X448 half is wiped here.
+impl Drop for SecretKey {
+    fn drop(&mut self) {
+        self.x448.zeroize();
+    }
 }
 
 impl ZeroizeOnDrop for SecretKey {}
