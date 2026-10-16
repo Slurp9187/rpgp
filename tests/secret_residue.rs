@@ -517,22 +517,34 @@ fn pkesk() {
     for (version, primary, sub) in types {
         for how in [Protection::None, Protection::Cfb] {
             let case = case(version, primary.clone(), sub.clone(), how);
-            let mut rng = ChaCha8Rng::seed_from_u64(8);
-            let sk = RawSessionKey::from(&SESSION_KEY[..]);
-            let enc = &case.key.to_public_key().public_subkeys[0];
-            let (pkesk, typ) = if version == KeyVersion::V6 {
-                let p = PublicKeyEncryptedSessionKey::from_session_key_v6(&mut rng, &sk, enc);
-                (p.unwrap(), EskType::V6)
-            } else {
-                let p = PublicKeyEncryptedSessionKey::from_session_key_v3(
-                    &mut rng,
-                    &sk,
-                    SymmetricKeyAlgorithm::AES256,
-                    enc,
-                );
-                (p.unwrap(), EskType::V3_4)
+            let public = case.key.to_public_key();
+            let enc = &public.public_subkeys[0];
+            let make = || {
+                let mut rng = ChaCha8Rng::seed_from_u64(8);
+                let sk = RawSessionKey::from(&SESSION_KEY[..]);
+                if version == KeyVersion::V6 {
+                    let p = PublicKeyEncryptedSessionKey::from_session_key_v6(&mut rng, &sk, enc);
+                    (p.unwrap(), EskType::V6)
+                } else {
+                    let p = PublicKeyEncryptedSessionKey::from_session_key_v3(
+                        &mut rng,
+                        &sk,
+                        SymmetricKeyAlgorithm::AES256,
+                        enc,
+                    );
+                    (p.unwrap(), EskType::V3_4)
+                }
             };
-            drop(sk);
+
+            // Encrypting to the recipient: only the session key is secret here.
+            set_needles(&[&SESSION_KEY]);
+            let hits = residue(|| drop(make()));
+            clear_needles();
+            let name = format!("{sub:?} {how:?} PKESK encrypt");
+            eprintln!("{name}: {hits}");
+            results.push((name, hits));
+
+            let (pkesk, typ) = make();
 
             let secrets = secrets_of(&case.key, &password(case.how));
             let mut needles: Vec<&[u8]> = secrets.0.iter().map(|s| &s[..]).collect();

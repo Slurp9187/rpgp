@@ -319,7 +319,7 @@ impl Decryptor for SecretKey {
                     bail!("All-zero x25519 shared secret");
                 }
 
-                shared_secret.to_bytes().to_vec()
+                Zeroizing::new(shared_secret.to_bytes().to_vec())
             }
             SecretKey::P256 { secret, .. } => {
                 derive_shared_secret_decryption::<p256::NistP256>(data.public_point, secret, 65)?
@@ -419,7 +419,7 @@ fn derive_shared_secret_decryption<C>(
     public_point: &Mpi,
     our_secret: &elliptic_curve::SecretKey<C>,
     pub_bytes: usize,
-) -> Result<Vec<u8>>
+) -> Result<Zeroizing<Vec<u8>>>
 where
     C: elliptic_curve::CurveArithmetic,
     elliptic_curve::FieldBytesSize<C>: elliptic_curve::sec1::ModulusSize,
@@ -437,7 +437,7 @@ where
         ephemeral_public_key.as_affine(),
     );
 
-    Ok(shared_secret.raw_secret_bytes().to_vec())
+    Ok(Zeroizing::new(shared_secret.raw_secret_bytes().to_vec()))
 }
 
 /// Obtain the OpenPGP session key for a DH shared secret.
@@ -456,7 +456,7 @@ pub fn derive_session_key(
     let param = build_ecdh_param(&curve.oid(), alg_sym, hash, fingerprint);
 
     // Perform key derivation
-    let z = kdf(hash, shared_secret, alg_sym.key_size(), &param)?;
+    let z = Zeroizing::new(kdf(hash, shared_secret, alg_sym.key_size(), &param)?);
 
     // Perform AES Key Unwrap
     let mut encrypted_session_key_vec = vec![0; encrypted_key_len];
@@ -546,7 +546,8 @@ pub fn kdf(hash: HashAlgorithm, x: &[u8], length: usize, param: &[u8]) -> Result
     let prefix = vec![0, 0, 0, 1];
 
     let values: Vec<&[u8]> = vec![&prefix, x, param];
-    let data = values.concat();
+    // Holds the shared secret `x`.
+    let data = Zeroizing::new(values.concat());
 
     let mut digest = hash.digest(&data)?;
     digest.truncate(length);
@@ -556,7 +557,9 @@ pub fn kdf(hash: HashAlgorithm, x: &[u8], length: usize, param: &[u8]) -> Result
 
 /// PKCS5-style padding, with a block-size of 8.
 /// However, the padding may exceed the length of one block, to obfuscate key size.
-fn pad(plain: &[u8]) -> Vec<u8> {
+///
+/// The result holds the session key, so it is built at its final size, in a buffer that wipes.
+fn pad(plain: &[u8]) -> Zeroizing<Vec<u8>> {
     let len = plain.len();
 
     // We produce "short padding" (between 1 and 8 bytes)
@@ -576,7 +579,8 @@ fn pad(plain: &[u8]) -> Vec<u8> {
     let padding = padding as u8;
 
     // Extend length of plain_padded, fill with `padding` value
-    let mut plain_padded = plain.to_vec();
+    let mut plain_padded = Zeroizing::new(Vec::with_capacity(padded_len));
+    plain_padded.extend_from_slice(plain);
     plain_padded.resize(padded_len, padding);
 
     plain_padded
@@ -631,7 +635,7 @@ pub fn encrypt<R: CryptoRng + Rng>(
 
             (
                 encoded_public,
-                shared_secret.as_bytes().to_vec(),
+                Zeroizing::new(shared_secret.as_bytes().to_vec()),
                 hash,
                 alg_sym,
             )
@@ -664,7 +668,7 @@ pub fn encrypt<R: CryptoRng + Rng>(
     let param = build_ecdh_param(&params.curve().oid(), *alg_sym, *hash, fingerprint);
 
     // Perform key derivation
-    let z = kdf(*hash, &shared_secret, alg_sym.key_size(), &param)?;
+    let z = Zeroizing::new(kdf(*hash, &shared_secret, alg_sym.key_size(), &param)?);
 
     // Pad plaintext
     let plain_padded = pad(plain);
@@ -683,7 +687,7 @@ pub fn encrypt<R: CryptoRng + Rng>(
 fn derive_shared_secret_encryption<C, R: CryptoRng + Rng>(
     mut rng: R,
     their_public: &elliptic_curve::PublicKey<C>,
-) -> Result<(Vec<u8>, Vec<u8>)>
+) -> Result<(Vec<u8>, Zeroizing<Vec<u8>>)>
 where
     C: elliptic_curve::CurveArithmetic + elliptic_curve::point::PointCompression,
     elliptic_curve::FieldBytesSize<C>: elliptic_curve::sec1::ModulusSize,
@@ -701,7 +705,7 @@ where
 
     Ok((
         our_public.as_bytes().to_vec(),
-        shared_secret.raw_secret_bytes().to_vec(),
+        Zeroizing::new(shared_secret.raw_secret_bytes().to_vec()),
     ))
 }
 
