@@ -304,7 +304,9 @@ mod held_secret_tests {
 
     use super::*;
     use crate::{
-        composed::{DetachedSignature, EncryptionCaps, KeyType, SecretKeyParamsBuilder, SubkeyParamsBuilder},
+        composed::{
+            DetachedSignature, EncryptionCaps, KeyType, SecretKeyParamsBuilder, SubkeyParamsBuilder,
+        },
         crypto::{ecc_curve::ECCCurve, hash::HashAlgorithm},
         types::{KeyDetails, Password},
     };
@@ -331,7 +333,10 @@ mod held_secret_tests {
             .unwrap();
 
         let held = [
-            (key.primary_key.secret_params(), key.primary_key.public_key().public_params()),
+            (
+                key.primary_key.secret_params(),
+                key.primary_key.public_key().public_params(),
+            ),
             (
                 key.secret_subkeys[0].key.secret_params(),
                 key.secret_subkeys[0].key.public_key().public_params(),
@@ -361,6 +366,7 @@ mod held_secret_tests {
             &b"held"[..],
         )
         .unwrap();
-        sig.verify(&key.primary_key.public_key(), &b"held"[..]).unwrap();
+        sig.verify(&key.primary_key.public_key(), &b"held"[..])
+            .unwrap();
     }
 }
