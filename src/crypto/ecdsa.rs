@@ -41,7 +41,7 @@ pub enum SecretKey {
         curve: ECCCurve,
 
         // The secret material as raw Mpi data (without Mpi length header)
-        #[debug("{}", hex::encode(mpi_data))]
+        #[debug("..")]
         mpi_data: BytesMut,
     },
 }

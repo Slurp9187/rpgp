@@ -257,7 +257,10 @@ pub enum MaybeProtected {
 
     /// Encrypted message without integrity protection (using the legacy "Symmetrically Encrypted
     /// Data" packet)
-    Unprotected { key: Zeroizing<Vec<u8>> },
+    Unprotected {
+        #[debug("..")]
+        key: Zeroizing<Vec<u8>>,
+    },
 }
 
 /// State machine that reads from the encrypted input stream and performs decryption.
@@ -295,6 +298,7 @@ where
     Prefix {
         #[debug("BufDecryptor")]
         decryptor: BufDecryptor<M>,
+        #[debug("{} bytes", prefix.len())]
         prefix: BytesMut,
         source: R,
         protected: MaybeProtected,
@@ -305,11 +309,13 @@ where
         data_available: usize,
         #[debug("BufDecryptor")]
         decryptor: BufDecryptor<M>,
+        #[debug("{} bytes", buffer.len())]
         buffer: BytesMut,
         source: R,
         protected: MaybeProtected,
     },
     Done {
+        #[debug("{} bytes", buffer.len())]
         buffer: BytesMut,
         source: R,
     },
@@ -703,5 +709,21 @@ where
             }
         }
         Ok(read)
+    }
+}
+
+#[cfg(test)]
+mod debug_tests {
+    use zeroize::Zeroizing;
+
+    use super::MaybeProtected;
+    use crate::debug_redaction_tests::{assert_redacted, SECRET};
+
+    #[test]
+    fn sed_session_key_is_redacted() {
+        let protected = MaybeProtected::Unprotected {
+            key: Zeroizing::new(SECRET.to_vec()),
+        };
+        assert_redacted(&format!("{protected:?}"), SECRET, "MaybeProtected::Unprotected");
     }
 }

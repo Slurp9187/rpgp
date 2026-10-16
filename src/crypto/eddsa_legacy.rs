@@ -18,7 +18,7 @@ pub enum SecretKey {
         curve: ECCCurve,
 
         // The secret parameter as opaque data (including the Mpi length header)
-        #[debug("{}", hex::encode(opaque))]
+        #[debug("..")]
         opaque: BytesMut,
     },
 }

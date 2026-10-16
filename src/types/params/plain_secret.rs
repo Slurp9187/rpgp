@@ -62,7 +62,7 @@ pub enum PlainSecretParams {
     Unknown {
         #[zeroize(skip)]
         alg: PublicKeyAlgorithm,
-        #[debug("{}", hex::encode(data))]
+        #[debug("..")]
         data: Zeroizing<Vec<u8>>,
         #[zeroize(skip)]
         #[debug("{}", hex::encode(pub_params))]

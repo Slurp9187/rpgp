@@ -47,5 +47,8 @@ pub mod types;
 mod parsing;
 mod parsing_reader;
 
+#[cfg(test)]
+mod debug_redaction_tests;
+
 /// The version of this crate.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");

@@ -64,7 +64,7 @@ pub struct StreamDecryptor<R: BufRead> {
     /// finished reading from source?
     is_source_done: bool,
     /// main buffer
-    #[debug("{}", hex::encode(buffer))]
+    #[debug("{} bytes", buffer.len())]
     buffer: BytesMut,
     /// end point of encrypted data in `buffer`
     in_buffer_end: usize,
