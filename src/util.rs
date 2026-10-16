@@ -47,6 +47,103 @@ pub(crate) fn fill_buffer_bytes<R: std::io::BufRead>(
     Ok(read_total)
 }
 
+/// How much stack [`burn_stack`] overwrites.
+const BURN_STACK_SIZE: usize = 64 * 1024;
+
+/// Overwrites the stack below the caller with zeros.
+///
+/// Secret material passes through stack frames that nothing can wipe: digest and cipher state,
+/// arguments passed by value, moved-from locals. Once those frames return their bytes stay on
+/// the stack, and a large value built later in the same place carries them into the heap in
+/// its unused space. Called after an operation on secret material returns, this overwrites
+/// the region its callees used.
+#[inline(never)]
+pub(crate) fn burn_stack() {
+    let mut buf = [0u8; BURN_STACK_SIZE];
+    zeroize::Zeroize::zeroize(&mut buf[..]);
+    std::hint::black_box(&buf);
+}
+
+/// A fixed-size read buffer that never reallocates and wipes its whole allocation on drop.
+///
+/// Packet bodies pass through it, and a secret key packet's body is secret key material. A
+/// `BytesMut` can't be wiped reliably: once advanced, the consumed bytes are out of reach, and
+/// growing it can leave a copy behind.
+pub(crate) struct WipingBuffer {
+    data: Box<[u8]>,
+    start: usize,
+    end: usize,
+}
+
+impl WipingBuffer {
+    pub(crate) fn new(capacity: usize) -> Self {
+        Self {
+            data: vec![0u8; capacity].into_boxed_slice(),
+            start: 0,
+            end: 0,
+        }
+    }
+
+    /// The buffered bytes not yet consumed.
+    pub(crate) fn remaining(&self) -> &[u8] {
+        &self.data[self.start..self.end]
+    }
+
+    pub(crate) fn has_remaining(&self) -> bool {
+        self.start < self.end
+    }
+
+    pub(crate) fn advance(&mut self, amt: usize) {
+        assert!(amt <= self.end - self.start, "advance past the end");
+        self.start += amt;
+    }
+
+    /// Copies up to `buf.len()` buffered bytes into `buf` and consumes them.
+    pub(crate) fn copy_to(&mut self, buf: &mut [u8]) -> usize {
+        let n = buf.len().min(self.end - self.start);
+        buf[..n].copy_from_slice(&self.data[self.start..self.start + n]);
+        self.start += n;
+        n
+    }
+
+    /// Moves the unconsumed bytes to the front, then fills the rest from `source`.
+    /// Returns how many bytes were read.
+    pub(crate) fn fill<R: std::io::BufRead>(&mut self, mut source: R) -> std::io::Result<usize> {
+        if self.start > 0 {
+            self.data.copy_within(self.start..self.end, 0);
+            self.end -= self.start;
+            self.start = 0;
+        }
+        let mut read_total = 0;
+        while self.end < self.data.len() {
+            let source_buffer = source.fill_buf()?;
+            let read = source_buffer.len().min(self.data.len() - self.end);
+            if read == 0 {
+                break;
+            }
+            self.data[self.end..self.end + read].copy_from_slice(&source_buffer[..read]);
+            self.end += read;
+            read_total += read;
+            source.consume(read);
+        }
+        Ok(read_total)
+    }
+}
+
+impl Drop for WipingBuffer {
+    fn drop(&mut self) {
+        zeroize::Zeroize::zeroize(&mut self.data[..]);
+    }
+}
+
+impl std::fmt::Debug for WipingBuffer {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("WipingBuffer")
+            .field("remaining", &(self.end - self.start))
+            .finish_non_exhaustive()
+    }
+}
+
 macro_rules! impl_try_from_into {
     ($enum_name:ident, $( $name:ident => $variant_type:ty ),*) => {
        $(

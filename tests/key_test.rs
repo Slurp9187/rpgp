@@ -1498,14 +1498,16 @@ fn test_short_ed25519() -> TestResult {
         panic!("expected unencrypted TSK");
     };
 
-    let PlainSecretParams::EdDSALegacy(pgp::crypto::eddsa_legacy::SecretKey::Ed25519(secret)) =
-        secret
-    else {
-        panic!("expected ed25519 TSK");
-    };
+    secret.with(pkey.primary_key.public_key().public_params(), |secret| {
+        let PlainSecretParams::EdDSALegacy(pgp::crypto::eddsa_legacy::SecretKey::Ed25519(secret)) =
+            secret
+        else {
+            panic!("expected ed25519 TSK");
+        };
 
-    // the as_bytes always returns 32 bytes even if the encoding was short (31 bytes)
-    assert_eq!(secret.as_bytes().len(), 32);
+        // the as_bytes always returns 32 bytes even if the encoding was short (31 bytes)
+        assert_eq!(secret.as_bytes().len(), 32);
+    })?;
 
     let sig = DetachedSignature::sign_binary_data(
         rand::thread_rng(),

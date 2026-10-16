@@ -47,7 +47,7 @@ impl EncryptionCaps {
 }
 
 /// Parameters for the creation of a [`SignedSecretKey`]
-#[derive(Debug, PartialEq, Eq, Builder)]
+#[derive(derive_more::Debug, PartialEq, Eq, Builder)]
 #[builder(build_fn(validate = "Self::validate"))]
 pub struct SecretKeyParams {
     /// OpenPGP key version of primary
@@ -91,6 +91,7 @@ pub struct SecretKeyParams {
 
     // -- Password-locking of the primary
     #[builder(default)]
+    #[debug("..")]
     passphrase: Option<String>,
     #[builder(default)]
     s2k: Option<S2kParams>,
@@ -112,7 +113,7 @@ pub struct SecretKeyParams {
 }
 
 /// Parameters for the creation of a subkey
-#[derive(Debug, Clone, PartialEq, Eq, Builder)]
+#[derive(derive_more::Debug, Clone, PartialEq, Eq, Builder)]
 pub struct SubkeyParams {
     // -- OpenPGP key version of this subkey
     #[builder(default)]
@@ -135,6 +136,7 @@ pub struct SubkeyParams {
 
     // -- Password-locking of this subkey
     #[builder(default)]
+    #[debug("..")]
     passphrase: Option<String>,
     #[builder(default)]
     s2k: Option<S2kParams>,
@@ -364,7 +366,7 @@ impl SecretKeyParams {
                     };
 
                     if let Some(passphrase) = passphrase {
-                        sub.set_password_with_s2k(&passphrase.as_str().into(), s2k)?;
+                        sub.set_password_with_s2k(&Password::from(passphrase), s2k)?;
                     }
 
                     Ok((sub, keyflags, embedded))
@@ -632,7 +634,10 @@ impl KeyType {
             }
         };
 
-        Ok((pub_params, types::SecretParams::Plain(plain)))
+        Ok((
+            pub_params,
+            types::SecretParams::Plain(types::PlainSecret::new(self.to_alg(), &plain)),
+        ))
     }
 }
 

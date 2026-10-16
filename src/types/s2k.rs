@@ -3,7 +3,7 @@ use std::io::{self, BufRead};
 use byteorder::WriteBytesExt;
 use bytes::Bytes;
 use rand::{CryptoRng, Rng};
-use zeroize::Zeroizing;
+use zeroize::{Zeroize, Zeroizing};
 
 use crate::{
     composed::RawSessionKey,
@@ -214,6 +214,103 @@ pub enum StringToKey {
 }
 
 impl StringToKey {
+    /// One round of a Simple, Salted or Iterated-and-Salted S2K: hashes `round` zero bytes,
+    /// then the salt and passphrase as the S2K type says, and writes the start of the digest
+    /// to `out`.
+    ///
+    /// The hasher is a concrete type on the stack, not a boxed one: a boxed hasher's state
+    /// still holds the passphrase when it is freed, and the digest crates can't wipe it. The
+    /// stack copy can't be wiped either; the digest output is.
+    fn hash_round(
+        &self,
+        hash_alg: HashAlgorithm,
+        round: usize,
+        passphrase: &[u8],
+        out: &mut [u8],
+    ) -> Result<()> {
+        match hash_alg {
+            HashAlgorithm::Md5 => self.hash_round_with::<md5::Md5>(round, passphrase, out),
+            HashAlgorithm::Sha1 => {
+                self.hash_round_with::<sha1_checked::Sha1>(round, passphrase, out)
+            }
+            HashAlgorithm::Ripemd160 => {
+                self.hash_round_with::<ripemd::Ripemd160>(round, passphrase, out)
+            }
+            HashAlgorithm::Sha256 => self.hash_round_with::<sha2::Sha256>(round, passphrase, out),
+            HashAlgorithm::Sha384 => self.hash_round_with::<sha2::Sha384>(round, passphrase, out),
+            HashAlgorithm::Sha512 => self.hash_round_with::<sha2::Sha512>(round, passphrase, out),
+            HashAlgorithm::Sha224 => self.hash_round_with::<sha2::Sha224>(round, passphrase, out),
+            HashAlgorithm::Sha3_256 => {
+                self.hash_round_with::<sha3::Sha3_256>(round, passphrase, out)
+            }
+            HashAlgorithm::Sha3_512 => {
+                self.hash_round_with::<sha3::Sha3_512>(round, passphrase, out)
+            }
+            _ => bail!("invalid hash algorithm: {}", hash_alg),
+        }
+    }
+
+    fn hash_round_with<D: digest::Digest>(
+        &self,
+        round: usize,
+        passphrase: &[u8],
+        out: &mut [u8],
+    ) -> Result<()> {
+        let mut hasher = D::new();
+
+        // add 0s prefix
+        for _ in 0..round {
+            hasher.update([0u8]);
+        }
+
+        match self {
+            StringToKey::Simple { .. } => {
+                hasher.update(passphrase);
+            }
+            StringToKey::Salted { salt, .. } => {
+                hasher.update(salt);
+                hasher.update(passphrase);
+            }
+            StringToKey::IteratedAndSalted { salt, count, .. } => {
+                /// Converts a coded iteration count into a decoded count.
+                /// Ref: https://www.rfc-editor.org/rfc/rfc9580.html#section-3.7.1.3-3
+                fn decode_count(coded_count: u8) -> usize {
+                    ((16u32 + u32::from(coded_count & 15))
+                        << (u32::from(coded_count >> 4) + EXPBIAS)) as usize
+                }
+
+                let data_size = salt.len() + passphrase.len();
+                // how many bytes are supposed to be hashed
+                let mut count = decode_count(*count);
+
+                if count < data_size {
+                    // if the count is less, hash one full set
+                    count = data_size;
+                }
+
+                while count > data_size {
+                    hasher.update(salt);
+                    hasher.update(passphrase);
+                    count -= data_size;
+                }
+
+                if count < salt.len() {
+                    hasher.update(&salt[..count]);
+                } else {
+                    hasher.update(salt);
+                    count -= salt.len();
+                    hasher.update(&passphrase[..count]);
+                }
+            }
+            _ => unimplemented_err!("S2K {:?} is not available", self),
+        }
+
+        let mut hash = hasher.finalize();
+        out.copy_from_slice(&hash[..out.len()]);
+        hash.zeroize();
+        Ok(())
+    }
+
     pub fn new_default<R: CryptoRng + Rng>(rng: R) -> Self {
         StringToKey::new_iterated(rng, HashAlgorithm::default(), DEFAULT_ITER_SALTED_COUNT)
     }
@@ -309,6 +406,12 @@ impl StringToKey {
     /// - Implementations MUST NOT decrypt a secret using MD5, SHA-1, or RIPEMD-160 as a hash
     ///   function in an S2K KDF in a version 6 (or later) packet.
     pub fn derive_key(&self, passphrase: &[u8], key_size: usize) -> Result<RawSessionKey> {
+        let key = self.derive_key_inner(passphrase, key_size);
+        crate::util::burn_stack();
+        key
+    }
+
+    fn derive_key_inner(&self, passphrase: &[u8], key_size: usize) -> Result<RawSessionKey> {
         let key = match self {
             Self::Simple { hash_alg, .. }
             | Self::Salted { hash_alg, .. }
@@ -319,66 +422,15 @@ impl StringToKey {
                 let rounds = (key_size as f32 / digest_size as f32).ceil() as usize;
 
                 let mut key = Zeroizing::new(vec![0u8; key_size]);
-                let zeros = vec![0u8; rounds];
 
                 for round in 0..rounds {
-                    let mut hasher = hash_alg.new_hasher()?;
-
-                    // add 0s prefix
-                    hasher.update(&zeros[..round]);
-
-                    match self {
-                        StringToKey::Simple { .. } => {
-                            hasher.update(passphrase);
-                        }
-                        StringToKey::Salted { salt, .. } => {
-                            hasher.update(salt);
-                            hasher.update(passphrase);
-                        }
-                        StringToKey::IteratedAndSalted { salt, count, .. } => {
-                            /// Converts a coded iteration count into a decoded count.
-                            /// Ref: https://www.rfc-editor.org/rfc/rfc9580.html#section-3.7.1.3-3
-                            fn decode_count(coded_count: u8) -> usize {
-                                ((16u32 + u32::from(coded_count & 15))
-                                    << (u32::from(coded_count >> 4) + EXPBIAS))
-                                    as usize
-                            }
-
-                            let data_size = salt.len() + passphrase.len();
-                            // how many bytes are supposed to be hashed
-                            let mut count = decode_count(*count);
-
-                            if count < data_size {
-                                // if the count is less, hash one full set
-                                count = data_size;
-                            }
-
-                            while count > data_size {
-                                hasher.update(salt);
-                                hasher.update(passphrase);
-                                count -= data_size;
-                            }
-
-                            if count < salt.len() {
-                                hasher.update(&salt[..count]);
-                            } else {
-                                hasher.update(salt);
-                                count -= salt.len();
-                                hasher.update(&passphrase[..count]);
-                            }
-                        }
-                        _ => unimplemented_err!("S2K {:?} is not available", self),
-                    }
-
                     let start = round * digest_size;
                     let end = if round == rounds - 1 {
                         key_size
                     } else {
                         (round + 1) * digest_size
                     };
-
-                    let hash = hasher.finalize();
-                    key[start..end].copy_from_slice(&hash[..end - start]);
+                    self.hash_round(*hash_alg, round, passphrase, &mut key[start..end])?;
                 }
 
                 key
@@ -424,17 +476,22 @@ impl StringToKey {
                     m
                 );
 
-                use argon2::{Algorithm, Argon2, Params, Version};
+                use argon2::{Algorithm, Argon2, Block, Params, Version};
 
-                let a2 = Argon2::new(
-                    Algorithm::Argon2id,
-                    Version::V0x13,
-                    Params::new(m, *t as u32, *p as u32, Some(key_size))?,
-                );
+                let params = Params::new(m, *t as u32, *p as u32, Some(key_size))?;
+                // Our own block memory, wiped on drop: argon2's `hash_password_into` frees its
+                // blocks, which are derived from the passphrase, unwiped.
+                let mut blocks = Zeroizing::new(vec![Block::default(); params.block_count()]);
+                let a2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
 
                 let mut output_key_material = Zeroizing::new(vec![0; key_size]);
 
-                a2.hash_password_into(passphrase, salt, &mut output_key_material)?;
+                a2.hash_password_into_with_memory(
+                    passphrase,
+                    salt,
+                    &mut output_key_material,
+                    &mut blocks[..],
+                )?;
 
                 output_key_material
             }

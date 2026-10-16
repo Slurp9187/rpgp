@@ -11,8 +11,9 @@ pub enum Password {
 }
 
 impl From<String> for Password {
+    /// Takes the string's bytes, so no unwiped copy is left behind.
     fn from(value: String) -> Self {
-        Self::Static(value.as_bytes().to_vec().into())
+        Self::Static(value.into_bytes().into())
     }
 }
 
