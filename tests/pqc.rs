@@ -541,3 +541,70 @@ fn test_a_7_3_detached_signature() -> TestResult {
     }
     Ok(())
 }
+
+/// Detached signatures made with the RFC 9980 A.3 and A.4 keys by rPGP 0.21.0 with ml-dsa 0.0.4
+/// must keep verifying after the move to ml-dsa 0.1.
+#[test]
+fn test_ml_dsa_0_0_4_signatures_verify() -> TestResult {
+    let message = std::fs::read("./tests/pqc/fork-mldsa-0.0.4-message.txt")?;
+
+    for (pk, sig) in [
+        (
+            "./tests/pqc/v6-mldsa-65-sample-pk.asc",
+            "./tests/pqc/fork-mldsa-65-0.0.4-signature.asc",
+        ),
+        (
+            "./tests/pqc/v6-mldsa-87-sample-pk.asc",
+            "./tests/pqc/fork-mldsa-87-0.0.4-signature.asc",
+        ),
+    ] {
+        let (pub_key, _) = SignedPublicKey::from_armor_file(pk)?;
+        let (sig, _) = DetachedSignature::from_armor_file(sig)?;
+
+        sig.verify(&pub_key, &message[..])?;
+        assert!(sig.verify(&pub_key, &b"XXX"[..]).is_err());
+    }
+    Ok(())
+}
+
+fn gen_ml_dsa_key<R: RngCore + CryptoRng>(
+    mut rng: R,
+    key_type: KeyType,
+) -> TestResult<SignedSecretKey> {
+    let key = SecretKeyParamsBuilder::default()
+        .version(KeyVersion::V6)
+        .key_type(key_type)
+        .can_sign(true)
+        .primary_user_id("Me <me-ml-dsa@mail.com>".into())
+        .passphrase(None)
+        .build()?
+        .generate(&mut rng)?;
+    key.verify_bindings()?;
+    Ok(key)
+}
+
+/// Generate an ML-DSA key, sign with it and verify the signature, for both parameter sets.
+#[test]
+fn test_ml_dsa_round_trip() -> TestResult {
+    let _ = pretty_env_logger::try_init();
+    let mut rng = ChaCha8Rng::seed_from_u64(0);
+
+    for (key_type, hash) in [
+        (KeyType::MlDsa65Ed25519, HashAlgorithm::Sha3_256),
+        (KeyType::MlDsa87Ed448, HashAlgorithm::Sha3_512),
+    ] {
+        let key = gen_ml_dsa_key(&mut rng, key_type)?;
+        let pub_key = key.to_public_key();
+
+        let sig = DetachedSignature::sign_binary_data(
+            &mut rng,
+            &*key,
+            &Password::empty(),
+            hash,
+            &b"round trip\n"[..],
+        )?;
+        sig.verify(&pub_key, &b"round trip\n"[..])?;
+        assert!(sig.verify(&pub_key, &b"XXX"[..]).is_err());
+    }
+    Ok(())
+}

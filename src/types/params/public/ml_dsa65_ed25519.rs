@@ -48,9 +48,8 @@ impl Serialize for MlDsa65Ed25519PublicParams {
 
 #[cfg(test)]
 mod tests {
-    use ml_dsa::KeyGen;
     use proptest::prelude::*;
-    use rand::SeedableRng;
+    use rand::{RngCore, SeedableRng};
 
     use super::*;
 
@@ -63,11 +62,13 @@ mod tests {
                 let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(seed);
 
                 let x = ed25519_dalek::SigningKey::generate(&mut rng);
-                let ml = MlDsa65::key_gen(&mut rng);
+                let mut ml_seed = [0u8; 32];
+                rng.fill_bytes(&mut ml_seed);
+                let ml = ml_dsa::SigningKey::<MlDsa65>::from_seed(&ml_seed.into());
 
                 MlDsa65Ed25519PublicParams {
                     ed25519: x.verifying_key(),
-                    ml_dsa: Box::new(ml.verifying_key().clone()),
+                    ml_dsa: Box::new(AsRef::<ml_dsa::VerifyingKey<_>>::as_ref(&ml).clone()),
                 }
             }
 

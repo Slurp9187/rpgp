@@ -45,9 +45,8 @@ impl Serialize for MlDsa87Ed448PublicParams {
 
 #[cfg(test)]
 mod tests {
-    use ml_dsa::KeyGen;
     use proptest::prelude::*;
-    use rand::SeedableRng;
+    use rand::{RngCore, SeedableRng};
 
     use super::*;
 
@@ -60,11 +59,13 @@ mod tests {
                 let mut rng = rand_chacha::ChaCha8Rng::seed_from_u64(seed);
 
                 let x = cx448::SigningKey::generate(&mut rng);
-                let ml = MlDsa87::key_gen(&mut rng);
+                let mut ml_seed = [0u8; 32];
+                rng.fill_bytes(&mut ml_seed);
+                let ml = ml_dsa::SigningKey::<MlDsa87>::from_seed(&ml_seed.into());
 
                 MlDsa87Ed448PublicParams {
                     ed448: x.verifying_key(),
-                    ml_dsa: Box::new(ml.verifying_key().clone()),
+                    ml_dsa: Box::new(AsRef::<ml_dsa::VerifyingKey<_>>::as_ref(&ml).clone()),
                 }
             }
 
