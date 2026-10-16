@@ -1548,6 +1548,7 @@ dependencies = [
  "p256",
  "p384",
  "p521",
+ "polyval",
  "pretty_assertions",
  "pretty_env_logger",
  "proptest",
@@ -1649,6 +1650,7 @@ dependencies = [
  "cpufeatures 0.2.17",
  "opaque-debug",
  "universal-hash",
+ "zeroize",
 ]
 
 [[package]]

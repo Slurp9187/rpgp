@@ -28,9 +28,10 @@ fn modes_wipe_state() {
 }
 
 // Not checked here: the `zeroize` features of aes-gcm and ghash only wipe temporary key copies
-// in `new`, which no type-level check can see. polyval 0.6's `zeroize` is not enabled: on x86 its
-// autodetect backend holds the state in a `ManuallyDrop` union and never drops it, so the
-// backend's wiping `Drop` never runs (`needs_drop::<polyval::Polyval>()` is false either way).
+// in `new`, which no type-level check can see. polyval 0.6's `zeroize` only helps its soft
+// backend: on x86 the autodetect backend holds the state in a `ManuallyDrop` union and never
+// drops it (`needs_drop::<polyval::Polyval>()` is false either way), and the aarch64 (pmull)
+// backend has no wipe.
 
 #[cfg(feature = "pqc")]
 #[test]
