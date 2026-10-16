@@ -153,6 +153,8 @@ large-rsa = []
 malformed-artifact-compat = []
 
 pqc = ["dep:ml-kem", "dep:ml-dsa", "dep:slh-dsa", "dep:shake"]
+# Keep unlocked secret key material encrypted under a per-process key while idle.
+sealed-secrets = []
 draft-wussler-openpgp-forwarding = []
 
 [profile.bench]

@@ -46,6 +46,7 @@ pub mod types;
 
 mod parsing;
 mod parsing_reader;
+mod sealed;
 
 #[cfg(test)]
 mod debug_redaction_tests;
