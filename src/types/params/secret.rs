@@ -1,11 +1,12 @@
 use std::io::{self, BufRead};
 
-use zeroize::{ZeroizeOnDrop, Zeroizing};
+use zeroize::ZeroizeOnDrop;
 
 use crate::{
     crypto::{aead::AeadAlgorithm, public_key::PublicKeyAlgorithm, sym::SymmetricKeyAlgorithm},
     errors::{bail, InvalidInputSnafu, Result},
     parsing_reader::BufReadParsing,
+    sealed::SecretBytes,
     types::*,
 };
 
@@ -25,11 +26,15 @@ pub enum SecretParams {
 /// [`PlainSecretParams`] only for the duration of [`PlainSecret::with`]. A parsed value on the
 /// heap would carry stale stack bytes in its unused enum space, and moving one leaves its
 /// source bytes behind; neither can be wiped.
+///
+/// With the `sealed-secrets` feature, the serialized params are also kept encrypted under a
+/// per-process key while idle, and decrypted only inside [`PlainSecret::with`] (and while the
+/// key is serialized).
 #[derive(Clone, derive_more::Debug)]
 pub struct PlainSecret {
     alg: PublicKeyAlgorithm,
     #[debug("..")]
-    raw: Zeroizing<Vec<u8>>,
+    raw: SecretBytes,
 }
 
 impl PlainSecret {
@@ -37,7 +42,7 @@ impl PlainSecret {
     pub fn new(alg: PublicKeyAlgorithm, params: &PlainSecretParams) -> Self {
         Self {
             alg,
-            raw: params.to_raw(),
+            raw: SecretBytes::new(params.to_raw()),
         }
     }
 
@@ -49,7 +54,10 @@ impl PlainSecret {
         public_params: &PublicParams,
         f: impl FnOnce(&PlainSecretParams) -> T,
     ) -> Result<T> {
-        let out = PlainSecretParams::from_raw(&self.raw, self.alg, public_params).map(|p| f(&p));
+        let out = self
+            .raw
+            .with_open(|raw| PlainSecretParams::from_raw(raw, self.alg, public_params))
+            .map(|p| f(&p));
         crate::util::burn_stack();
         out
     }
@@ -60,12 +68,13 @@ impl PlainSecret {
 
     fn checksum_simple(&self) -> Vec<u8> {
         let mut hasher = crate::crypto::checksum::SimpleChecksum::default();
-        std::hash::Hasher::write(&mut hasher, &self.raw);
+        self.raw
+            .with_open(|raw| std::hash::Hasher::write(&mut hasher, raw));
         hasher.finalize().to_vec()
     }
 
     fn to_writer<W: io::Write>(&self, writer: &mut W, version: KeyVersion) -> Result<()> {
-        writer.write_all(&self.raw)?;
+        self.raw.with_open(|raw| writer.write_all(raw))?;
         if version == KeyVersion::V3 || version == KeyVersion::V4 {
             // Only for a version 3 or 4 packet where the string-to-key usage octet is zero, a
             // two-octet checksum of the algorithm-specific portion (sum of all octets, mod 65536).
@@ -88,8 +97,7 @@ impl PlainSecret {
 /// Constant time in the secret bytes.
 impl PartialEq for PlainSecret {
     fn eq(&self, other: &Self) -> bool {
-        use subtle::ConstantTimeEq;
-        self.alg == other.alg && bool::from(self.raw.as_slice().ct_eq(other.raw.as_slice()))
+        self.alg == other.alg && self.raw.ct_eq(&other.raw)
     }
 }
 
@@ -286,5 +294,79 @@ fn parse_secret_fields<B: BufRead>(
             let params = EncryptedSecretParams::new(i.rest()?.freeze(), enc_params);
             Ok(SecretParams::Encrypted(params))
         }
+    }
+}
+
+#[cfg(test)]
+mod held_secret_tests {
+    use rand::SeedableRng;
+    use rand_chacha::ChaCha8Rng;
+
+    use super::*;
+    use crate::{
+        composed::{
+            DetachedSignature, EncryptionCaps, KeyType, SecretKeyParamsBuilder, SubkeyParamsBuilder,
+        },
+        crypto::{ecc_curve::ECCCurve, hash::HashAlgorithm},
+        types::{KeyDetails, Password},
+    };
+
+    /// A held secret key's idle form: with `sealed-secrets`, ciphertext with no window of the
+    /// secret in it; without, the serialized secret itself. Signing works either way.
+    #[test]
+    fn idle_key_form() {
+        let mut rng = ChaCha8Rng::seed_from_u64(12);
+        let key = SecretKeyParamsBuilder::default()
+            .key_type(KeyType::Ed25519Legacy)
+            .can_sign(true)
+            .primary_user_id("held <held@example.com>".into())
+            .subkey(
+                SubkeyParamsBuilder::default()
+                    .key_type(KeyType::ECDH(ECCCurve::Curve25519Legacy))
+                    .can_encrypt(EncryptionCaps::All)
+                    .build()
+                    .unwrap(),
+            )
+            .build()
+            .unwrap()
+            .generate(&mut rng)
+            .unwrap();
+
+        let held = [
+            (
+                key.primary_key.secret_params(),
+                key.primary_key.public_key().public_params(),
+            ),
+            (
+                key.secret_subkeys[0].key.secret_params(),
+                key.secret_subkeys[0].key.public_key().public_params(),
+            ),
+        ];
+        for (params, public) in held {
+            let SecretParams::Plain(plain) = params else {
+                panic!("unprotected key expected");
+            };
+            let raw = plain.with(public, |p| p.to_raw()).unwrap();
+            let idle = plain.raw.idle_bytes();
+            // Skip the MPI length header: the window is secret bytes only.
+            let secret = &raw[2..];
+            let visible = idle.windows(8).any(|w| secret.windows(8).any(|s| s == w));
+            if cfg!(feature = "sealed-secrets") {
+                assert!(!visible, "secret visible in the idle form");
+            } else {
+                assert_eq!(idle, &raw[..]);
+            }
+        }
+
+        let sig = DetachedSignature::sign_binary_data(
+            &mut rng,
+            &key.primary_key,
+            &Password::empty(),
+            HashAlgorithm::Sha256,
+            &b"held"[..],
+        )
+        .unwrap();
+        sig.verify(&key.primary_key.public_key(), &b"held"[..])
+            .unwrap();
     }
 }

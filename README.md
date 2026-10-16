@@ -126,7 +126,19 @@ fn main() -> pgp::errors::Result<()> {
 - `malformed-artifact-compat`: Be lenient towards some types of malformed artifacts (erroneously formed ECDH PKESK; invalidly short first partial body segments; embedded signatures that don't round-trip, which are kept verbatim as opaque subpackets so that the enclosing certificate remains importable - the affected subkey binding will not verify). Most users will NOT need this feature, should be disabled by default!
 - `pqc`: Enables implementation of PQC support as specified in RFC 9980 (this feature was previously called `draft-pqc`)
   - In the Slurp9187/rpgp fork, `pqc` uses ml-dsa 0.1, which needs getrandom 0.4, so `pqc` together with `wasm` does not build for wasm32-unknown-unknown.
+- `sealed-secrets` (Slurp9187/rpgp fork): keeps unlocked secret key material encrypted (AES-256-GCM) under a random per-process key while it is idle, and decrypts it only for the duration of each use. This keeps idle keys out of memory dumps, swap and crash reports in readable form. It does not protect a key while it is in use.
 - `draft-wussler-openpgp-forwarding`: Enables support for the formats and functionality from [draft-wussler-openpgp-forwarding](https://datatracker.ietf.org/doc/draft-wussler-openpgp-forwarding/)
+
+## Secret handling in the Slurp9187/rpgp fork
+
+- Secret key material, passphrases and session keys are wiped from the buffers rPGP frees. `tests/secret_residue.rs` checks this with an allocator that scans every freed block.
+- `Debug` output redacts secret material.
+- Breaking: `SecretParams::Plain` holds a `PlainSecret` instead of a `PlainSecretParams`. Read the params with `PlainSecret::with(public_params, |params| ...)`. They are held serialized, and parsed only for the duration of that call.
+- Known limits:
+  - rsa 0.9's PKCS#1 v1.5 decryption frees its padded block, which holds the session key, unwiped.
+  - polyval's x86 and aarch64 backends never wipe the GHASH key.
+  - Stack copies can't be prevented in Rust. rPGP overwrites 64 KiB of stack after each operation on secret material.
+  - The key builder's passphrase `String` is cloned on `build()`, and nothing wipes the clone. Use `set_password` after generation instead.
 
 ## Current Status
 
